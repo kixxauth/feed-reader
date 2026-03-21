@@ -1,13 +1,13 @@
 # TODO: Hono + Hello World HTML Implementation
 
 ## Dependency Installation
-- [ ] Install Hono v4 via `npm install hono`
+- [x] Install Hono v4 via `npm install hono`
 
 ## Configuration Changes
-- [ ] Add `rules` entry to `wrangler.jsonc` for `.css` as `Text` modules (globs: `**/*.css`), inserted after the `compatibility_flags` array
+- [x] Add `rules` entry to `wrangler.jsonc` for `.css` as `Text` modules (globs: `**/*.css`), inserted after the `compatibility_flags` array
 
 ## File Creation
-- [ ] Create `src/styles.css` with the CSS from the Stylesheet section of the plan
+- [x] Create `src/styles.css` with the CSS from the Stylesheet section of the plan
 
 ## File Modification
 - [ ] Replace `src/index.js` with Hono app

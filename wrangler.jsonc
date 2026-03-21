@@ -13,6 +13,12 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/*.css"]
+		}
+	],
 	"routes": [
 		{
 			"pattern": "reader.kixx.news",
