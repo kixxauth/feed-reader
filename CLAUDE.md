@@ -2,6 +2,8 @@ See @README.md for project overview and command line development commands for th
 
 ## Cloudflare Workers
 
+DO NOT ever deploy this Worker to Cloudflare. This project uses manual deploys only. You *may* prompt to the user to deploy it, but NEVER deploy it yourself without being explicitly asked to do so by the user.
+
 STOP. Your knowledge of Cloudflare Workers APIs and limits may be outdated. Always retrieve current documentation before any Workers, KV, R2, D1, Durable Objects, Queues, Vectorize, AI, or Agents SDK task.
 
 ### MCP Documentation Server

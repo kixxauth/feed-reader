@@ -1,0 +1,157 @@
+I would like to convert this Cloudflare Worker project to use Hono for server side HTML rendering.
+
+Current state:
+- Single src/index.js file with a basic Worker that returns "Hello World!" as plain text
+- Using raw Cloudflare Workers API (export default { async fetch() })
+- No framework dependencies—only dev dependencies (wrangler, vitest, vitest-pool-workers)
+- Configured for custom domain reader.kixx.news
+- nodejs_compat flag enabled (good for Hono compatibility)
+
+---
+
+Steps to convert to Hono + Hello World HTML
+
+1. Install Hono — Add hono to package.json dependencies
+2. Update src/index.js — Replace the raw Worker export with a Hono app instance and handler
+3. Create a Hono app — Instantiate Hono and define routes (at minimum, a GET / route)
+4. Define the Hello World route — Return HTML from the / route instead of plain text
+5. Verify wrangler.jsonc — May need minimal updates (probably none needed—current config is fine)
+6. Test locally — Run npm start to verify the HTML page renders
+
+---
+
+Key differences from current setup:
+
+- Before: Raw fetch handler with manual request routing
+- After: Hono provides routing, middleware, and convenience methods like res.html()
+- Before: Returning plain text Response
+- After: Using Hono's response helpers with proper content-type headers
+
+---
+
+**Minimum Viable Product**
+
+The objective of this plan should be provide a proof-of-concept for Hono by simply rendering a simple HTML page which displays the text "Hello World!".
+
+**Styles**
+I have a stylesheet which should be inlined into the HTML `<head>` section. The recommended approach is:
+
+Import CSS as Text (Recommended for small projects)
+
+  Store CSS in a separate file (src/styles.css), then import it as a string:
+
+  import styles from './styles.css?raw';
+
+  Then use ${styles} in the HTML template.
+
+  Pros: Keeps CSS separate, still inlines at build time, clean separation
+  Cons: Requires a bundler that supports ?raw imports (Wrangler's bundler supports this)
+
+Here is the CSS source to inline:
+
+```css
+/*
+Inspired by:
+https://www.joshwcomeau.com/css/custom-css-reset/
+*/
+
+:root {
+    /* Use light text on a dark background as the default to start.
+       Replace these colors with your own.
+    */
+    --color-background: hsla(162, 20%, 6%, 1);
+    --color-on-background: hsla(162, 20%, 88%, 1);
+
+    --font-family-body: sans-serif;
+}
+
+*, *::before, *::after {
+    /*
+    A more intuitive box sizing model:
+
+    **Set the box-sizing to border-box:** The width and height properties include the content,
+    padding, and border, but do not include the margin
+
+    With this rule applied, percentages will resolve based on the border-box. In the example above, our pink box would be 200px, and the inner content-box would shrink down to 156px (200px - 40px - 4px).
+    Instead of applying it on a case-by-case basis, apply it to all elements (with the wildcard *), as well as all pseudo-elements (*::before and *::after).
+    */
+    box-sizing: border-box;
+}
+
+body {
+    /*
+    Add accessible line-height:
+
+    The WCAG criteria states that line-height should be at least 1.5. This standard is meant
+    for body text and not headings, so you'll want to override this for your headings.
+    */
+    line-height: 1.5;
+    /*
+    Improve rendering of text on dark backgrounds
+
+    Confusingly, macOS browsers like Chrome and Safari still use subpixel antialiasing by default.
+    We need to explicitly turn it off, by setting font-smoothing to antialiased. macOS is the
+    only operating system to use subpixel-antialiasing, and so this rule has no effect
+    on other systems.
+    */
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-font-smoothing: antialiased;
+
+    background: var(--color-background);
+    color: var(--color-on-background);
+    font-family: var(--font-family-body);
+}
+
+h1, h2, h3, h4, h5, h6 {
+    /* Override the large WCAG accessible setting for body text here for headings. */
+    line-height: 1.2;
+}
+
+/* Carrry basic prefernces over to links */
+a {
+    color: var(--color-on-background);
+}
+
+/*
+Improve media defaults:
+
+Images are considered "inline" elements but this doesn't jive with how we use images most of
+the time. Typically, we treat images as layout elements, so using display: block sets a
+sensible default for most use cases.
+
+Also set max-width: 100% to keep large images from overflowing, if they're placed in a
+container that isn't wide enough to contain them.
+*/
+img, picture, video, canvas, svg {
+    display: block;
+    max-width: 100%;
+}
+
+/*
+Inherit fonts for form controls:
+
+By default, buttons and inputs don't inherit typographical styles from their parents.
+
+`font` is a rarely-used shorthand that sets a bunch of font-related properties, like
+font-size, font-weight, and font-family. By setting it to inherit, we instruct
+these elements to match the typography in their surrounding environment.
+*/
+input, button, textarea, select {
+    font: inherit;
+}
+
+/*
+Avoid text overflows:
+
+The overflow-wrap property lets us tweak the line-wrapping algorithm, and give it permission to
+use hard wraps when no soft wrap opportunties can be found. This prevents text overflows from
+breaking the layout.
+*/
+p, li, h1, h2, h3, h4, h5, h6 {
+    overflow-wrap: break-word;
+}
+```
+
+DO NOT write any code yet. You need to develop a detailed plan for building this minimum viable product given the current project structure and recommendations here.
+
+When you are done with your plan, put it in the plans/ directory.
