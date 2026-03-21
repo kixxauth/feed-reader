@@ -12,6 +12,12 @@
 	},
 	"compatibility_flags": [
 		"nodejs_compat"
+	],
+	"routes": [
+		{
+			"pattern": "reader.kixx.news",
+			"custom_domain": true
+		}
 	]
 	/**
 	 * Smart Placement
