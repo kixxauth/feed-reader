@@ -23,3 +23,16 @@ Cloudflare-specific skills are available via the Skill tool. Use them for specia
 - `cloudflare:wrangler` — wrangler CLI commands (deploy, dev, KV, R2, D1, secrets, etc.)
 - `cloudflare:durable-objects` — Durable Objects, RPC, SQLite storage, alarms, WebSockets
 - `cloudflare:cloudflare` — general Cloudflare platform (Workers, KV, D1, R2, AI, networking, security)
+
+## Development Server
+After starting the development server:
+
+```bash
+npm start
+```
+
+```bash
+npx wrangler dev
+```
+
+BE SURE to kill the server to free up the port for development or testing use.
