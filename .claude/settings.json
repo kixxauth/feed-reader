@@ -1,5 +1,7 @@
 {
   "enabledPlugins": {
     "cloudflare@cloudflare": true
-  }
+  },
+  "includeGitInstructions": false,
+  "respectGitignore": false
 }
