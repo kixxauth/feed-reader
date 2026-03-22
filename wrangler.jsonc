@@ -24,7 +24,20 @@
 			"pattern": "reader.kixx.news",
 			"custom_domain": true
 		}
-	]
+	],
+	"kv_namespaces": [
+		{
+			"binding": "SESSIONS",
+			"id": "9a9069d90a3b40fe919672a5a19a2d2b"
+		}
+	],
+	"vars": {
+		"SESSION_TTL_SECONDS": "86400",
+		"GITHUB_OAUTH_CALLBACK_URL": "https://reader.kixx.news/auth/callback",
+		"GITHUB_CLIENT_ID": "test-client-id",
+		"GITHUB_CLIENT_SECRET": "test-client-secret",
+		"ALLOWED_EMAILS": "allowed@example.com"
+	}
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

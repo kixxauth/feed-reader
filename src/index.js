@@ -1,21 +1,36 @@
 import { Hono } from 'hono';
-import styles from './styles.css';
+import { renderLayout } from './layout.js';
+import { authMiddleware } from './auth/middleware.js';
+import { handleLogin } from './routes/login.js';
+import { handleCallback } from './routes/callback.js';
+import { handleLogout } from './routes/logout.js';
+import { handleLoggedOut } from './routes/logged-out.js';
 
 const app = new Hono();
 
+// Apply auth middleware globally. The middleware skips public paths internally.
+app.use('*', authMiddleware);
+
+// Public auth routes
+app.get('/login', handleLogin);
+app.get('/auth/callback', handleCallback);
+app.get('/logout', handleLogout);
+app.get('/logged-out', handleLoggedOut);
+
+// Protected routes
 app.get('/', (c) => {
-    return c.html(`<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feed Reader</title>
-    <style>${styles}</style>
-</head>
-<body>
-    <h1>Hello World!</h1>
-</body>
-</html>`);
+	const email = c.get('email');
+	const content = `<main>
+  <h1>Hello World!</h1>
+  <p>Logged in as ${email}</p>
+</main>`;
+	return c.html(
+		renderLayout({
+			title: 'Feed Reader',
+			content,
+			isAuthenticated: true,
+		})
+	);
 });
 
 export default app;
