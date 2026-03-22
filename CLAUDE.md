@@ -25,14 +25,9 @@ Cloudflare-specific skills are available via the Skill tool. Use them for specia
 - `cloudflare:cloudflare` — general Cloudflare platform (Workers, KV, D1, R2, AI, networking, security)
 
 ## Development Server
-After starting the development server:
+After starting the development server (`npm start` or `npx wrangler dev`) for testing or validation: BE SURE to kill the server to free up the port for development or testing use.
 
-```bash
-npm start
-```
+## Web Development Framework
+This project uses the Hono web development framework for HTTP request handling and server-side rendering of HTML from the Cloudflare Worker.
 
-```bash
-npx wrangler dev
-```
-
-BE SURE to kill the server to free up the port for development or testing use.
+The full documentation for Hono, including Cloudflare Worker bindings, is available online in Markdown format. Use it for all Hono documentation lookups: https://hono.dev/llms-full.txt
