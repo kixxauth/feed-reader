@@ -93,17 +93,41 @@ describe('Authenticated access', () => {
 		expect(body).toContain('Logout');
 	});
 
-	it('GET / with no feeds shows empty state message', async () => {
+	it('GET / contains a link to /feeds and does not render feed data', async () => {
 		const request = await makeAuthenticatedRequest('http://example.com/');
 		const ctx = createExecutionContext();
 		const response = await worker.fetch(request, env, ctx);
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('No feeds imported yet');
+		expect(body).toContain('href="/feeds"');
+		expect(body).not.toContain('<ul class="feed-list">');
+	});
+});
+
+describe('Feeds page', () => {
+	beforeEach(async () => {
+		await clearFeeds();
 	});
 
-	it('GET / with seeded feeds shows feed titles and hostnames sorted by hostname', async () => {
+	it('GET /feeds without a session redirects to /login?next=%2Ffeeds', async () => {
+		const response = await SELF.fetch('http://example.com/feeds', { redirect: 'manual' });
+		expect(response.status).toBe(302);
+		expect(response.headers.get('location')).toBe('/login?next=%2Ffeeds');
+	});
+
+	it('GET /feeds with valid session and no feeds shows "No feeds available"', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('No feeds available');
+		expect(body).not.toContain('<nav class="pagination">');
+	});
+
+	it('GET /feeds with seeded feeds shows titles and hostnames sorted by hostname', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-z',
@@ -125,27 +149,23 @@ describe('Authenticated access', () => {
 			},
 		]);
 
-		const request = await makeAuthenticatedRequest('http://example.com/');
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
 		const ctx = createExecutionContext();
 		const response = await worker.fetch(request, env, ctx);
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		// All three feed titles should appear
 		expect(body).toContain('Alpha Feed');
 		expect(body).toContain('Monkey Feed');
 		expect(body).toContain('Zebra Feed');
 
-		// All three hostnames should appear
 		expect(body).toContain('alpha.example.com');
 		expect(body).toContain('monkey.example.com');
 		expect(body).toContain('zebra.example.com');
 
-		// Should NOT show empty state
-		expect(body).not.toContain('No feeds imported yet');
+		expect(body).not.toContain('No feeds available');
 
-		// Verify sort order: alpha < monkey < zebra
 		const alphaPos = body.indexOf('alpha.example.com');
 		const monkeyPos = body.indexOf('monkey.example.com');
 		const zebraPos = body.indexOf('zebra.example.com');
@@ -153,7 +173,7 @@ describe('Authenticated access', () => {
 		expect(monkeyPos).toBeLessThan(zebraPos);
 	});
 
-	it('GET / with seeded feeds HTML-escapes feed data', async () => {
+	it('GET /feeds HTML-escapes feed data', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-xss',
@@ -163,17 +183,97 @@ describe('Authenticated access', () => {
 			},
 		]);
 
-		const request = await makeAuthenticatedRequest('http://example.com/');
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
 		const ctx = createExecutionContext();
 		const response = await worker.fetch(request, env, ctx);
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		// Raw script tag must NOT appear unescaped
 		expect(body).not.toContain('<script>alert("xss")</script>');
-		// Escaped version should be present
 		expect(body).toContain('&lt;script&gt;');
+	});
+
+	it('GET /feeds?page=2 shows second page', async () => {
+		await seedFeeds(
+			Array.from({ length: 51 }, (_, i) => ({
+				id: `feed-${i}`,
+				hostname: `host-${String(i).padStart(3, '0')}.example.com`,
+				title: `Feed ${i}`,
+				html_url: `https://host-${String(i).padStart(3, '0')}.example.com`,
+			}))
+		);
+
+		const request = await makeAuthenticatedRequest('http://example.com/feeds?page=2');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Page 2 of 2');
+		expect(body).toContain('host-050.example.com');
+	});
+
+	it('GET /feeds?page=1 disables Previous link', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/feeds?page=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('aria-disabled="true"');
+		expect(body).not.toContain('href="/feeds?page=0"');
+	});
+
+	it('GET /feeds on last page disables Next link', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		// Next link should be disabled on the last (only) page
+		const nextDisabledPos = body.lastIndexOf('aria-disabled="true"');
+		const nextTextPos = body.indexOf('Next');
+		expect(nextDisabledPos).toBeLessThan(nextTextPos);
+		expect(body).not.toContain('href="/feeds?page=2"');
+	});
+
+	it('GET /feeds?page=0 clamps to page 1', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/feeds?page=0');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Page 1 of');
+	});
+
+	it('GET /feeds?page=999 clamps to last page', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com' },
+			{ id: 'feed-2', hostname: 'beta.example.com', title: 'Beta Feed', html_url: 'https://beta.example.com' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/feeds?page=999');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Page 1 of 1');
 	});
 });
 

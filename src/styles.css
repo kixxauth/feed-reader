@@ -98,3 +98,33 @@ breaking the layout.
 p, li, h1, h2, h3, h4, h5, h6 {
     overflow-wrap: break-word;
 }
+
+.feed-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.feed-item {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+}
+
+.feed-hostname {
+    opacity: 0.7;
+    font-size: 0.85em;
+}
+
+.pagination {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-top: 1rem;
+}
+
+.pagination a[aria-disabled="true"] {
+    opacity: 0.4;
+    pointer-events: none;
+    cursor: default;
+}

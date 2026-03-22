@@ -1,5 +1,7 @@
 # TODO: Feed Import Epic Implementation Plan
 
+> **Superseded (partial):** `getAllFeedsSortedByHostname` was removed from `src/db.js` and replaced with `getFeedsPaginated` + `PAGE_SIZE` as part of the Feeds Page feature (see `plans/feeds-page-pagination.md`). The home page no longer displays feeds; feeds moved to `/feeds`. "Pagination of the feed list" listed under Out of Scope below has since been implemented.
+
 ## Implementation Approach
 
 This epic adds RSS feed management to the Feed Reader. The strategy involves:

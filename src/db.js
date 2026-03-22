@@ -3,19 +3,35 @@
  *
  * All functions accept a D1 database binding as the first argument
  * (i.e. `c.env.DB` from a Hono context, or `env.DB` in tests).
+ *
+ * Exports:
+ *   PAGE_SIZE           — feeds per page (50), used by route handlers for pagination math
+ *   getFeedsPaginated   — returns one page of feeds plus the total count
+ *   upsertFeed          — insert-or-update a single feed row (used by future admin endpoints)
  */
 
+export const PAGE_SIZE = 50;
+
 /**
- * Return all feed rows sorted by hostname ascending.
+ * Return a paginated slice of feeds sorted by hostname ascending, plus the total count.
  *
  * @param {D1Database} db - The D1 database binding
- * @returns {Promise<Array>} Sorted array of feed row objects
+ * @param {number} page - 1-indexed page number (clamped to 1 if < 1)
+ * @returns {Promise<{ feeds: Array, total: number }>}
  */
-export async function getAllFeedsSortedByHostname(db) {
+export async function getFeedsPaginated(db, page) {
+	const clampedPage = Math.max(1, page);
+	const offset = (clampedPage - 1) * PAGE_SIZE;
+
+	const countRow = await db.prepare('SELECT COUNT(*) AS total FROM feeds').first();
+	const total = countRow.total;
+
 	const result = await db
-		.prepare('SELECT * FROM feeds ORDER BY hostname ASC')
+		.prepare('SELECT * FROM feeds ORDER BY hostname ASC LIMIT ? OFFSET ?')
+		.bind(PAGE_SIZE, offset)
 		.all();
-	return result.results;
+
+	return { feeds: result.results, total };
 }
 
 /**
