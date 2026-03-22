@@ -31,6 +31,14 @@
 			"id": "9a9069d90a3b40fe919672a5a19a2d2b"
 		}
 	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "feed-reader-db",
+			"database_id": "cdbadc96-d614-4846-b595-2565865e19df",
+			"migrations_dir": "migrations"
+		}
+	],
 	// Keep the deployed vars and don't override them with these settings.
 	"keep_vars": true,
 	"vars": {

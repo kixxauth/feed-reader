@@ -1,8 +1,50 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import worker from '../src';
 import { createSession } from '../src/auth/session.js';
 import { createState } from '../src/auth/state.js';
+
+// ---------------------------------------------------------------------------
+// Helper: create an authenticated request with a valid session cookie
+// ---------------------------------------------------------------------------
+async function makeAuthenticatedRequest(url) {
+	const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+	return new Request(url, {
+		headers: { Cookie: `feed_reader_session=${sessionId}` },
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Helper: seed the DB with sample feed rows for testing
+// ---------------------------------------------------------------------------
+async function seedFeeds(feeds) {
+	for (const feed of feeds) {
+		await env.DB.prepare(
+			`INSERT INTO feeds (id, hostname, type, title, xml_url, html_url, no_crawl, description, last_build_date, score)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+			.bind(
+				feed.id,
+				feed.hostname,
+				feed.type ?? null,
+				feed.title,
+				feed.xml_url ?? null,
+				feed.html_url ?? null,
+				feed.no_crawl ?? 0,
+				feed.description ?? null,
+				feed.last_build_date ?? null,
+				feed.score ?? null
+			)
+			.run();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: clear the feeds table between tests
+// ---------------------------------------------------------------------------
+async function clearFeeds() {
+	await env.DB.prepare('DELETE FROM feeds').run();
+}
 
 describe('Unauthenticated access', () => {
 	it('GET / without a session cookie redirects to /login (unit style)', async () => {
@@ -37,18 +79,101 @@ describe('Login page', () => {
 });
 
 describe('Authenticated access', () => {
-	it('GET / with a valid session cookie returns 200 with Hello World! and Logout', async () => {
-		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
-		const request = new Request('http://example.com/', {
-			headers: { Cookie: `feed_reader_session=${sessionId}` },
-		});
+	beforeEach(async () => {
+		await clearFeeds();
+	});
+
+	it('GET / with a valid session returns 200 with Logout link', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/');
 		const ctx = createExecutionContext();
 		const response = await worker.fetch(request, env, ctx);
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('Hello World!');
 		expect(body).toContain('Logout');
+	});
+
+	it('GET / with no feeds shows empty state message', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('No feeds imported yet');
+	});
+
+	it('GET / with seeded feeds shows feed titles and hostnames sorted by hostname', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-z',
+				hostname: 'zebra.example.com',
+				title: 'Zebra Feed',
+				html_url: 'https://zebra.example.com',
+			},
+			{
+				id: 'feed-a',
+				hostname: 'alpha.example.com',
+				title: 'Alpha Feed',
+				html_url: 'https://alpha.example.com',
+			},
+			{
+				id: 'feed-m',
+				hostname: 'monkey.example.com',
+				title: 'Monkey Feed',
+				html_url: 'https://monkey.example.com',
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		// All three feed titles should appear
+		expect(body).toContain('Alpha Feed');
+		expect(body).toContain('Monkey Feed');
+		expect(body).toContain('Zebra Feed');
+
+		// All three hostnames should appear
+		expect(body).toContain('alpha.example.com');
+		expect(body).toContain('monkey.example.com');
+		expect(body).toContain('zebra.example.com');
+
+		// Should NOT show empty state
+		expect(body).not.toContain('No feeds imported yet');
+
+		// Verify sort order: alpha < monkey < zebra
+		const alphaPos = body.indexOf('alpha.example.com');
+		const monkeyPos = body.indexOf('monkey.example.com');
+		const zebraPos = body.indexOf('zebra.example.com');
+		expect(alphaPos).toBeLessThan(monkeyPos);
+		expect(monkeyPos).toBeLessThan(zebraPos);
+	});
+
+	it('GET / with seeded feeds HTML-escapes feed data', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-xss',
+				hostname: 'safe.example.com',
+				title: '<script>alert("xss")</script>',
+				html_url: 'https://safe.example.com',
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		// Raw script tag must NOT appear unescaped
+		expect(body).not.toContain('<script>alert("xss")</script>');
+		// Escaped version should be present
+		expect(body).toContain('&lt;script&gt;');
 	});
 });
 

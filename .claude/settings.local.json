@@ -3,7 +3,12 @@
     "allow": [
       "mcp__plugin_cloudflare_cloudflare-docs__search_cloudflare_documentation",
       "Bash(npm install:*)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(git:*)",
+      "Bash(npx wrangler:*)",
+      "Bash(node -e \"const m = require\\(''''@cloudflare/vitest-pool-workers''''\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(list\\(d.get\\(''''exports'''',{}\\).keys\\(\\)\\), indent=2\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); exp=d.get\\(''''exports'''',{}\\); print\\(json.dumps\\(exp.get\\(''''.''''\\), indent=2\\)\\)\")"
     ]
   }
 }
