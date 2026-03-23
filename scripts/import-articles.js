@@ -16,7 +16,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -156,14 +157,18 @@ for (const row of articleRows) {
 		`  added = excluded.added`,
 	].join(' ');
 
+	const tmpFile = path.join(tmpdir(), `import-article-${row.id}.sql`);
 	try {
-		execSync(`npx wrangler d1 execute DB ${locationFlag} --command "${sql.replace(/"/g, '\\"')}"`, {
+		writeFileSync(tmpFile, sql, 'utf8');
+		execSync(`npx wrangler d1 execute DB ${locationFlag} --file ${tmpFile}`, {
 			stdio: 'pipe',
 		});
 		insertedCount++;
 	} catch (err) {
 		console.error(`Failed to upsert article id=${row.id}: ${err.message}`);
 		errorCount++;
+	} finally {
+		unlinkSync(tmpFile);
 	}
 }
 
