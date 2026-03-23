@@ -1,12 +1,12 @@
-I have an epic (collection of user stories related to a new feature) for this website. Review these user stories and acceptance criteria, and think about how you would implement them cohesively.
+I have an epic document (collection of user stories related to a new feature) for this website at
+
+./prompts/articles-browsing-epic.md
 
 After reviewing the user stories and acceptance criteria in this epic, create an implementation plan document.
 
-Before writing the implementation plan, explore the repository structure and review the relevant source files so that file paths, module names, and technical references in the plan are grounded in the actual codebase.
+Before writing the implementation plan, explore the repository structure and review the relevant source files so that file paths, module names, and technical references in the plan are grounded in the actual codebase. Review the completed implementation plans in ./plans/ to get the history of what has been done before.
 
-The epic is located at .
-
-Review all user stories and acceptance criteria, then create an implementation plan and put the plan document in the plans/ directory.
+Review all user stories and acceptance criteria in the epic document and think about how you would implement them cohesively. Then create an implementation plan document.
 
 The plan should begin with a brief Implementation Approach section (3–5 sentences) summarizing the overall strategy and any cross-cutting concerns across the stories.
 
@@ -23,3 +23,4 @@ The rest of the document is a TODO list. Break each user story into discrete tec
 
 Order items so that dependencies come first. Do not group items by story — sequence them by the order they should be implemented.
 
+When completed, put the plan document in the plans/ directory.
