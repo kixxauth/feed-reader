@@ -1,6 +1,6 @@
 I have an epic document (collection of user stories related to a new feature) for this website at
 
-./prompts/articles-browsing-epic.md
+./prompts/feed-crawling-epic.md
 
 After reviewing the user stories and acceptance criteria in this epic, create an implementation plan document.
 

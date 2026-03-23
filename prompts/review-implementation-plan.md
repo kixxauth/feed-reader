@@ -2,7 +2,7 @@ I have an implementation plan for a new feature or capability for this web app. 
 
 The current implementation plan can be found at:
 
-./plans/kv-write-mitigation.md
+./plans/feed-crawling-epic.md
 
 To gather context, you'll need to explore this codebase. Be sure to review previously completed implementation plans in the ./plans/ directory.
 
