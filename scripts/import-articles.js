@@ -129,14 +129,12 @@ function escapeSqlString(value) {
 }
 
 // ---------------------------------------------------------------------------
-// Build and execute upsert SQL via wrangler
+// Build and execute upsert SQL via wrangler (batched)
 // ---------------------------------------------------------------------------
 const locationFlag = envFlag === 'local' ? '--local' : '--remote';
+const BATCH_SIZE = 100;
 
-let insertedCount = 0;
-let errorCount = 0;
-
-for (const row of articleRows) {
+function buildRowSql(row) {
 	const id = escapeSqlString(row.id);
 	const feedId = escapeSqlString(row.feed_id);
 	const link = escapeSqlString(row.link);
@@ -145,7 +143,7 @@ for (const row of articleRows) {
 	const updated = escapeSqlString(row.updated);
 	const added = escapeSqlString(row.added);
 
-	const sql = [
+	return [
 		`INSERT INTO articles (id, feed_id, link, title, published, updated, added)`,
 		`VALUES (${id}, ${feedId}, ${link}, ${title}, ${published}, ${updated}, ${added})`,
 		`ON CONFLICT(id) DO UPDATE SET`,
@@ -156,17 +154,27 @@ for (const row of articleRows) {
 		`  updated = excluded.updated,`,
 		`  added = excluded.added`,
 	].join(' ');
+}
 
-	const tmpFile = path.join(tmpdir(), `import-article-${row.id}.sql`);
+let insertedCount = 0;
+let errorCount = 0;
+const totalBatches = Math.ceil(articleRows.length / BATCH_SIZE);
+
+for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+	const batch = articleRows.slice(batchIndex * BATCH_SIZE, (batchIndex + 1) * BATCH_SIZE);
+	const sql = batch.map(buildRowSql).join(';\n') + ';';
+
+	const tmpFile = path.join(tmpdir(), `import-articles-batch-${batchIndex}.sql`);
 	try {
 		writeFileSync(tmpFile, sql, 'utf8');
 		execSync(`npx wrangler d1 execute DB ${locationFlag} --file ${tmpFile}`, {
 			stdio: 'pipe',
 		});
-		insertedCount++;
+		insertedCount += batch.length;
+		console.log(`Batch ${batchIndex + 1}/${totalBatches}: imported ${insertedCount} article(s) so far`);
 	} catch (err) {
-		console.error(`Failed to upsert article id=${row.id}: ${err.message}`);
-		errorCount++;
+		console.error(`Batch ${batchIndex + 1}/${totalBatches} failed: ${err.message}`);
+		errorCount += batch.length;
 	} finally {
 		unlinkSync(tmpFile);
 	}
