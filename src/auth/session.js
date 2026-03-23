@@ -7,12 +7,12 @@ const COOKIE_ATTRIBUTES = 'HttpOnly; Secure; SameSite=Lax; Path=/';
 // ttlSeconds: number - session lifetime in seconds
 export async function createSession(kv, email, ttlSeconds) {
 	const sessionId = crypto.randomUUID();
-	const value = JSON.stringify({ email });
+	const value = JSON.stringify({ email, createdAt: Date.now() });
 	await kv.put(`session:${sessionId}`, value, { expirationTtl: ttlSeconds });
 	return sessionId;
 }
 
-// Reads and validates a session from KV. Returns the session object { email }
+// Reads and validates a session from KV. Returns the session object { email, createdAt }
 // or null if the session does not exist or has expired.
 export async function getSession(kv, sessionId) {
 	if (!sessionId) {
@@ -29,14 +29,20 @@ export async function getSession(kv, sessionId) {
 	}
 }
 
-// Refreshes the TTL of an existing session by re-putting it with a new TTL.
-// Returns true if successful, false if the session did not exist.
+// Refreshes an existing session: re-puts it with a new TTL and resets createdAt to now.
+// Returns true if successful, false if the session did not exist or could not be parsed.
 export async function refreshSession(kv, sessionId, ttlSeconds) {
 	const value = await kv.get(`session:${sessionId}`);
 	if (!value) {
 		return false;
 	}
-	await kv.put(`session:${sessionId}`, value, { expirationTtl: ttlSeconds });
+	let email;
+	try {
+		({ email } = JSON.parse(value));
+	} catch {
+		return false;
+	}
+	await kv.put(`session:${sessionId}`, JSON.stringify({ email, createdAt: Date.now() }), { expirationTtl: ttlSeconds });
 	return true;
 }
 

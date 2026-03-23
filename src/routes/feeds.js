@@ -45,9 +45,11 @@ export async function handleFeeds(c) {
 				const title = escapeHtml(feed.title);
 				const hostname = escapeHtml(feed.hostname);
 				const htmlUrl = escapeHtml(feed.html_url);
+				const feedId = escapeHtml(feed.id);
 				return `<li class="feed-item">
     <a href="${htmlUrl}" target="_blank" rel="noopener noreferrer">${title}</a>
     <span class="feed-hostname">${hostname}</span>
+    <a href="/feeds/${feedId}/articles">Articles</a>
   </li>`;
 			})
 			.join('\n');

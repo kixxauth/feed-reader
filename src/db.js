@@ -1,16 +1,20 @@
 /**
- * Database query helpers for the feeds table.
+ * Database query helpers for the feeds and articles tables.
  *
  * All functions accept a D1 database binding as the first argument
  * (i.e. `c.env.DB` from a Hono context, or `env.DB` in tests).
  *
  * Exports:
- *   PAGE_SIZE           — feeds per page (50), used by route handlers for pagination math
- *   getFeedsPaginated   — returns one page of feeds plus the total count
- *   upsertFeed          — insert-or-update a single feed row (used by future admin endpoints)
+ *   PAGE_SIZE                  — feeds per page (50), used by route handlers for pagination math
+ *   ARTICLES_PAGE_SIZE         — articles per page (20), used by articles route handler
+ *   getFeedsPaginated          — returns one page of feeds plus the total count
+ *   getFeedById                — returns a single feed by id, or null if not found
+ *   getArticlesByFeedPaginated — returns paginated articles for a feed with optional date filtering
+ *   upsertFeed                 — insert-or-update a single feed row (used by future admin endpoints)
  */
 
 export const PAGE_SIZE = 50;
+export const ARTICLES_PAGE_SIZE = 20;
 
 /**
  * Return a paginated slice of feeds sorted by hostname ascending, plus the total count.
@@ -32,6 +36,66 @@ export async function getFeedsPaginated(db, page) {
 		.all();
 
 	return { feeds: result.results, total };
+}
+
+/**
+ * Return a single feed by its id, or null if no feed with that id exists.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id to look up
+ * @returns {Promise<Object|null>}
+ */
+export async function getFeedById(db, feedId) {
+	const row = await db.prepare('SELECT * FROM feeds WHERE id = ?').bind(feedId).first();
+	return row ?? null;
+}
+
+/**
+ * Return a paginated slice of articles for a feed, sorted newest-first (NULLs last),
+ * optionally filtered by published date range. Returns the filtered total count.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id to query
+ * @param {number} page - 1-indexed page number
+ * @param {string|null} fromDate - Optional inclusive lower bound on published (YYYY-MM-DD)
+ * @param {string|null} toDate - Optional inclusive upper bound on published (YYYY-MM-DD)
+ * @returns {Promise<{ articles: Array, total: number }>}
+ */
+export async function getArticlesByFeedPaginated(db, feedId, page, fromDate, toDate) {
+	const offset = (page - 1) * ARTICLES_PAGE_SIZE;
+
+	// Build dynamic WHERE clause — feed_id is always required
+	const conditions = ['feed_id = ?'];
+	const bindings = [feedId];
+
+	if (fromDate !== null && fromDate !== undefined) {
+		conditions.push('published >= ?');
+		bindings.push(fromDate);
+	}
+
+	if (toDate !== null && toDate !== undefined) {
+		conditions.push('published <= ?');
+		bindings.push(toDate);
+	}
+
+	const whereClause = conditions.join(' AND ');
+
+	// COUNT query uses the same WHERE clause so total reflects the filtered result set
+	const countRow = await db
+		.prepare(`SELECT COUNT(*) AS total FROM articles WHERE ${whereClause}`)
+		.bind(...bindings)
+		.first();
+	const total = countRow.total;
+
+	// SELECT query with NULL-safe descending sort and pagination
+	const result = await db
+		.prepare(
+			`SELECT * FROM articles WHERE ${whereClause} ORDER BY (published IS NULL), published DESC LIMIT ? OFFSET ?`
+		)
+		.bind(...bindings, ARTICLES_PAGE_SIZE, offset)
+		.all();
+
+	return { articles: result.results, total };
 }
 
 /**

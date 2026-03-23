@@ -128,3 +128,35 @@ p, li, h1, h2, h3, h4, h5, h6 {
     pointer-events: none;
     cursor: default;
 }
+
+.article-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.article-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 1rem;
+}
+
+.article-date {
+    opacity: 0.6;
+    font-size: 0.85em;
+}
+
+.filter-form {
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    opacity: 0.85;
+}
+
+.filter-form input,
+.filter-form button,
+.filter-form a {
+    margin-right: 0.5rem;
+}

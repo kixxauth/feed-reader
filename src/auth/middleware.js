@@ -6,9 +6,16 @@ import {
 } from './session.js';
 
 // Paths that do not require authentication (exact match only).
-const PUBLIC_PATHS = new Set(['/login', '/auth/callback', '/logout', '/logged-out']);
+const PUBLIC_PATHS = new Set(['/login', '/auth/start', '/auth/callback', '/logout', '/logged-out']);
 
 // Hono middleware that protects all routes except the public paths above.
+//
+// Session refresh throttle: after validating a session, the middleware only
+// calls refreshSession (KV write) and re-sets the cookie when more than half
+// the TTL has elapsed since the session was created or last refreshed. This
+// cuts KV writes from once-per-request to roughly once per half-TTL period.
+// Sessions without a createdAt field (created before this field was added)
+// always refresh because `createdAt || 0` makes elapsed very large.
 export async function authMiddleware(c, next) {
 	// Skip auth for public paths (exact match).
 	if (PUBLIC_PATHS.has(c.req.path)) {
@@ -22,10 +29,15 @@ export async function authMiddleware(c, next) {
 	const session = await getSession(kv, sessionId);
 
 	if (session) {
-		// Valid session: refresh TTL, store email on context, continue.
-		await refreshSession(kv, sessionId, ttlSeconds);
+		// Valid session: store email on context, continue.
+		// Only refresh the session (KV write + Set-Cookie) when more than half the TTL has elapsed.
+		const elapsed = Date.now() - (session.createdAt || 0);
+		const threshold = (ttlSeconds * 1000) / 2;
+		if (elapsed >= threshold) {
+			await refreshSession(kv, sessionId, ttlSeconds);
+			c.header('Set-Cookie', makeSessionCookieHeader(sessionId, ttlSeconds));
+		}
 		c.set('email', session.email);
-		c.header('Set-Cookie', makeSessionCookieHeader(sessionId, ttlSeconds));
 		return await next();
 	}
 
