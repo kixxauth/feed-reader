@@ -3,5 +3,29 @@
     "cloudflare@cloudflare": true
   },
   "includeGitInstructions": false,
-  "respectGitignore": false
+  "respectGitignore": false,
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/log-bash-calls.mjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/log-bash-calls.mjs"
+          }
+        ]
+      }
+    ]
+  }
 }
