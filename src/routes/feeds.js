@@ -46,10 +46,19 @@ export async function handleFeeds(c) {
 				const hostname = escapeHtml(feed.hostname);
 				const htmlUrl = escapeHtml(feed.html_url);
 				const feedId = escapeHtml(feed.id);
+				const noCrawl = feed.no_crawl;
+				const crawlBadge = noCrawl
+					? `<span class="crawl-status-badge crawl-status-disabled">Disabled</span>`
+					: `<span class="crawl-status-badge crawl-status-enabled">Crawling</span>`;
+				const toggleButtonLabel = noCrawl ? 'Enable' : 'Disable';
 				return `<li class="feed-item">
     <a href="${htmlUrl}" target="_blank" rel="noopener noreferrer">${title}</a>
     <span class="feed-hostname">${hostname}</span>
+    ${crawlBadge}
     <a href="/feeds/${feedId}/articles">Articles</a>
+    <form method="POST" action="/api/feeds/${feedId}/toggle-crawl" class="toggle-crawl-form">
+      <button type="submit">${toggleButtonLabel}</button>
+    </form>
   </li>`;
 			})
 			.join('\n');

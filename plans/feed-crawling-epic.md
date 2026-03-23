@@ -28,7 +28,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
 
 ## TODO Items
 
-- [ ] **Extend feeds table migration with failure tracking column**
+- [x] **Extend feeds table migration with failure tracking column**
   - **Story**: Story 4 — Failed feeds are automatically disabled after repeated failures
   - **What**: Create a new migration file (`migrations/0003_add_failure_count_to_feeds.sql`) that adds `consecutive_failure_count INTEGER DEFAULT 0` column to the `feeds` table. This column tracks how many consecutive failed crawls a feed has had; it resets to 0 on success and increments on failure. After 5 consecutive failures, the `no_crawl` flag is set to true (auto-disable logic happens in the crawl routine, not the schema)
   - **Where**: `migrations/0003_add_failure_count_to_feeds.sql` (new file)
@@ -36,28 +36,28 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Migration adds `consecutive_failure_count` column with default value 0; column is accessible after applying migration
   - **Depends on**: none
 
-- [ ] **Create crawl_runs table migration**
+- [x] **Create crawl_runs table migration**
   - **Story**: Story 3 — Owner sees a history of crawl runs
   - **What**: Create a migration file (`migrations/0004_create_crawl_runs_table.sql`) defining the `crawl_runs` table that stores one row per crawl execution. Columns: `id` (TEXT PRIMARY KEY, generated via `crypto.randomUUID()`), `started_at` (TEXT NOT NULL, ISO 8601 timestamp), `completed_at` (TEXT, nullable ISO 8601 timestamp — reserved for future partial-recovery use; in the current implementation it is always set when the row is inserted at crawl completion), `total_feeds_attempted` (INTEGER NOT NULL), `total_feeds_failed` (INTEGER NOT NULL, count of feeds with errors), `total_articles_added` (INTEGER NOT NULL, sum across all feeds), `created_at` (TEXT DEFAULT CURRENT_TIMESTAMP). Add an index on `started_at DESC` for efficient reverse-chronological queries
   - **Where**: `migrations/0004_create_crawl_runs_table.sql` (new file)
   - **Acceptance criteria**: `crawl_runs` table exists with all columns per schema; `id` is primary key; index on `started_at DESC` exists; migration uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`
   - **Depends on**: none
 
-- [ ] **Create crawl_run_details table migration**
+- [x] **Create crawl_run_details table migration**
   - **Story**: Story 3 — Owner sees a history of crawl runs
   - **What**: Create a migration file (`migrations/0005_create_crawl_run_details_table.sql`) defining the `crawl_run_details` table that stores per-feed results for each crawl. Use a composite primary key `(crawl_run_id, feed_id)` since each feed appears at most once per crawl run — no separate `id` column needed. Columns: `crawl_run_id` (TEXT NOT NULL), `feed_id` (TEXT NOT NULL), `status` (TEXT NOT NULL, one of: 'success', 'failed', 'auto_disabled'), `articles_added` (INTEGER NOT NULL, number of new articles inserted), `error_message` (TEXT, nullable), `auto_disabled` (INTEGER DEFAULT 0, 1 if feed was auto-disabled as a result of this crawl), `created_at` (TEXT DEFAULT CURRENT_TIMESTAMP). Primary key is `(crawl_run_id, feed_id)`. No additional index needed since the composite PK already covers lookups by crawl_run_id
   - **Where**: `migrations/0005_create_crawl_run_details_table.sql` (new file)
   - **Acceptance criteria**: `crawl_run_details` table exists with all columns per schema; composite primary key on `(crawl_run_id, feed_id)` exists; migration uses `CREATE TABLE IF NOT EXISTS`
   - **Depends on**: none
 
-- [ ] **Install fast-xml-parser dependency**
+- [x] **Install fast-xml-parser dependency**
   - **Story**: Story 2 — Feeds are crawled automatically every 24 hours
   - **What**: Add `fast-xml-parser` as a production dependency (`npm install fast-xml-parser`). This library is used by the crawl module to parse RSS 2.0 and Atom 1.0 XML feeds. It is lightweight, has no native dependencies, and works in the Workers runtime
   - **Where**: `package.json`
   - **Acceptance criteria**: `fast-xml-parser` appears in `dependencies` in `package.json`; `npm install` succeeds; the library can be imported in Workers code
   - **Depends on**: none
 
-- [ ] **Add crawl query functions to database module**
+- [x] **Add crawl query functions to database module**
   - **Story**: Story 2, 3, 4 — Crawling, history view, and failure tracking
   - **What**: Add the following exported functions to `src/db.js`:
     1. `getEnabledFeeds(db)` — returns all feeds where `no_crawl = 0`, selecting all columns (`SELECT *`); the crawl module needs at minimum `id`, `xml_url`, and `consecutive_failure_count`
@@ -78,7 +78,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: All eleven functions exist and are exported; `recordCrawlRun` accepts a caller-provided `id`; `getCrawlRun*` functions return correctly ordered and filtered results; failure/disable/toggle functions update the feeds table correctly; `insertArticle` returns D1Result with `meta.changes`; all queries use parameter binding
   - **Depends on**: Create crawl_runs table migration, Create crawl_run_details table migration
 
-- [ ] **Create RSS crawl logic module**
+- [x] **Create RSS crawl logic module**
   - **Story**: Story 2 — Feeds are crawled automatically every 24 hours
   - **What**: Create `src/crawl.js` exporting `performCrawl(db)` — an async function that:
     1. Generates a `crawlRunId` via `crypto.randomUUID()` and records the start time as `startedAt = new Date().toISOString()`
@@ -119,7 +119,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: `performCrawl` fetches all enabled feeds; fetches and parses RSS/Atom XML; inserts new articles without duplicates; sets `added` to the crawl's start time; updates feed failure counts correctly; auto-disables after 5 consecutive failures (DB state after disable: `no_crawl=1`, `consecutive_failure_count=0`); records crawl history; returns summary; one feed's failure doesn't stop crawl; 30-second per-feed timeout via AbortController; User-Agent header set on each fetch
   - **Depends on**: Add crawl query functions to database module, Install fast-xml-parser dependency
 
-- [ ] **Refactor Worker export to support scheduled handler**
+- [x] **Refactor Worker export to support scheduled handler**
   - **Story**: Story 2 — Feeds are crawled automatically every 24 hours
   - **What**: Change `src/index.js` from `export default app;` to:
     ```js
@@ -142,7 +142,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Default export is an object with `fetch` and `scheduled` properties; all existing tests pass unchanged; `scheduled` handler wraps `performCrawl(env.DB)` in `ctx.waitUntil`; errors are caught and logged
   - **Depends on**: Create RSS crawl logic module
 
-- [ ] **Add cron trigger to wrangler.jsonc**
+- [x] **Add cron trigger to wrangler.jsonc**
   - **Story**: Story 2 — Feeds are crawled automatically every 24 hours
   - **What**: Add the following to `wrangler.jsonc`:
     ```jsonc
@@ -156,7 +156,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: `triggers.crons` array is present and valid in `wrangler.jsonc`; cron syntax is correct 5-field format
   - **Depends on**: Refactor Worker export to support scheduled handler
 
-- [ ] **Create crawl history list page route**
+- [x] **Create crawl history list page route**
   - **Story**: Story 3 — Owner sees a history of crawl runs
   - **What**: Create `src/routes/crawl-history.js` exporting `handleCrawlHistory` for `GET /crawl-history`. Import `escapeHtml` from `'../html-utils.js'` (same pattern as all other route files). The handler:
     1. Queries the most recent 30 crawl runs using `getCrawlRuns(db, 30)`
@@ -169,7 +169,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Page lists crawl runs newest-first; shows summary data; each run links to detail page; dates formatted as human-readable; empty state handled; HTML-escaped content; consistent styling with rest of site
   - **Depends on**: Add crawl query functions to database module
 
-- [ ] **Create crawl history detail page route**
+- [x] **Create crawl history detail page route**
   - **Story**: Story 3 — Owner sees a history of crawl runs
   - **What**: In `src/routes/crawl-history.js`, add a second exported handler `handleCrawlHistoryDetail` for `GET /crawl-history/:crawlRunId`. Import `escapeHtml` from `'../html-utils.js'`. The handler:
     1. Fetches the crawl run by ID via `getCrawlRunById(db, crawlRunId)`. Returns 404 if not found
@@ -186,7 +186,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Detail page shows per-feed results; feed titles displayed (with fallback to feed_id); status badges styled via CSS classes; error messages shown; all content HTML-escaped; 404 for invalid crawl run IDs
   - **Depends on**: Create crawl history list page route
 
-- [ ] **Register crawl history routes in main app**
+- [x] **Register crawl history routes in main app**
   - **Story**: Story 3 — Owner sees a history of crawl runs
   - **What**: In `src/index.js`, import `handleCrawlHistory` and `handleCrawlHistoryDetail` from `./routes/crawl-history.js` and register:
     - `app.get('/crawl-history', handleCrawlHistory)`
@@ -196,7 +196,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Both routes are registered; accessible to authenticated users; unauthenticated requests redirect to `/login?next=...`
   - **Depends on**: Create crawl history detail page route
 
-- [ ] **Add crawl history link to navigation**
+- [x] **Add crawl history link to navigation**
   - **Story**: Story 3 — Owner sees a history of crawl runs
   - **What**: Add a "Crawl History" link to the site navigation. The navigation lives in `src/layout.js` inside the `renderLayout` function. Currently the authenticated nav is:
     ```js
@@ -214,7 +214,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: "Crawl History" link visible on all authenticated pages; links to `/crawl-history`
   - **Depends on**: Register crawl history routes in main app
 
-- [ ] **Add per-feed crawl toggle to Feeds page**
+- [x] **Add per-feed crawl toggle to Feeds page**
   - **Story**: Story 5 — Owner can enable or disable crawling per feed
   - **What**: Modify `src/routes/feeds.js` to display crawl status and a toggle form for each feed. Currently each feed `<li>` shows: title link, hostname span, articles link. Add:
     1. A crawl status indicator: a small badge showing "Crawling" or "Disabled" (using a CSS class for styling, e.g., `class="crawl-status-badge"`)
@@ -224,7 +224,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Each feed shows crawl status badge; toggle form submits POST; button text is contextual ("Disable" when enabled, "Enable" when disabled)
   - **Depends on**: none (frontend only; backend will be added next)
 
-- [ ] **Create API endpoint to toggle per-feed crawling**
+- [x] **Create API endpoint to toggle per-feed crawling**
   - **Story**: Story 5 — Owner can enable or disable crawling per feed
   - **What**: Create `src/routes/api/toggle-feed-crawl.js` exporting `handleToggleFeedCrawl` for `POST /api/feeds/:feedId/toggle-crawl`. Note: the directory `src/routes/api/` does not yet exist and must be created. The handler:
     1. Reads the feed ID from the URL path parameter
@@ -237,14 +237,14 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: POST toggles `no_crawl` flag; enabling resets failure count; redirects back to `/feeds` with 303; 404 for nonexistent feed; protected by auth middleware
   - **Depends on**: Add crawl query functions to database module, Add per-feed crawl toggle to Feeds page
 
-- [ ] **Register crawl toggle API endpoint in main app**
+- [x] **Register crawl toggle API endpoint in main app**
   - **Story**: Story 5 — Owner can enable or disable crawling per feed
   - **What**: In `src/index.js`, import `handleToggleFeedCrawl` from `./routes/api/toggle-feed-crawl.js` and register: `app.post('/api/feeds/:feedId/toggle-crawl', handleToggleFeedCrawl)`. Place after other routes. Protected by `authMiddleware` automatically (the `/api/` path prefix is not in `PUBLIC_PATHS`)
   - **Where**: `src/index.js`
   - **Acceptance criteria**: Route registered; POST requests work; auth protection in place
   - **Depends on**: Create API endpoint to toggle per-feed crawling
 
-- [ ] **Add CSS for crawl history page and feed toggles**
+- [x] **Add CSS for crawl history page and feed toggles**
   - **Story**: Story 3, 5 — Crawl history UI and feed toggle styling
   - **What**: Append styles to `src/styles.css` for:
     - `.crawl-run-summary` — container for crawl run row (border-bottom, padding)
@@ -258,7 +258,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Crawl history rows are visually distinct; status badges are visible; feed toggle button styled consistently; styles use CSS custom properties (the existing CSS defines `--color-background` and `--color-on-background` in `:root`) where appropriate
   - **Depends on**: Create crawl history list page route, Add per-feed crawl toggle to Feeds page
 
-- [ ] **Write tests for crawl logic**
+- [x] **Write tests for crawl logic**
   - **Story**: Story 2, 4 — Crawl execution and failure tracking
   - **What**: In `test/index.spec.js`, add helpers and a `describe('Crawl functionality')` block. Import `performCrawl` from `'../src/crawl.js'` at the top of the file.
 
@@ -281,7 +281,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: All tests pass; crawl logic tested without real network calls; edge cases covered; auto-disable test verifies `no_crawl=1` and `consecutive_failure_count=0` (not count=5)
   - **Depends on**: Create RSS crawl logic module
 
-- [ ] **Write tests for crawl history pages**
+- [x] **Write tests for crawl history pages**
   - **Story**: Story 3 — Owner sees a history of crawl runs
   - **What**: In `test/index.spec.js`, add `describe('Crawl history page')`:
     - `GET /crawl-history without session redirects to login`
@@ -295,7 +295,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: All tests pass; route protection verified; content rendering verified
   - **Depends on**: Register crawl history routes in main app
 
-- [ ] **Write tests for feed crawl toggle**
+- [x] **Write tests for feed crawl toggle**
   - **Story**: Story 5 — Owner can enable or disable crawling per feed
   - **What**: In `test/index.spec.js`, add `describe('Feed crawl toggle API')`:
     - `POST /api/feeds/:feedId/toggle-crawl without session redirects to login`
@@ -307,7 +307,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: All tests pass; toggle behavior verified; auth protection verified
   - **Depends on**: Register crawl toggle API endpoint in main app
 
-- [ ] **Update README with crawl documentation**
+- [x] **Update README with crawl documentation**
   - **Story**: Documentation for site owner
   - **What**: Add a "Feed Crawling" section to `README.md` describing:
     - Crawl runs automatically at 02:00 UTC daily (configurable via `triggers.crons` in `wrangler.jsonc`)
@@ -320,7 +320,7 @@ The crawl is fully idempotent: articles are matched by their `id` (derived from 
   - **Acceptance criteria**: Documentation is clear and accurate
   - **Depends on**: Add cron trigger to wrangler.jsonc, Register crawl history routes in main app, Register crawl toggle API endpoint in main app
 
-- [ ] **Validate implementation end-to-end**
+- [x] **Validate implementation end-to-end**
   - **Story**: All stories
   - **What**: Run through the complete workflow:
     1. Apply migrations: `npx wrangler d1 migrations apply feed-reader-db --local`

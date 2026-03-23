@@ -2,7 +2,7 @@ import styles from './styles.css';
 
 export function renderLayout({ title, content, isAuthenticated = false }) {
 	const nav = isAuthenticated
-		? `<nav><a href="/logout">Logout</a></nav>`
+		? `<nav><a href="/crawl-history">Crawl History</a> <a href="/logout">Logout</a></nav>`
 		: '';
 	return `<!DOCTYPE html>
 <html lang="en">

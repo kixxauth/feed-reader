@@ -160,3 +160,101 @@ p, li, h1, h2, h3, h4, h5, h6 {
 .filter-form a {
     margin-right: 0.5rem;
 }
+
+/* -----------------------------------------------------------------------
+   Crawl history list and detail pages
+   ----------------------------------------------------------------------- */
+
+/* One crawl run row in the history list, or the summary block on the detail page */
+.crawl-run-summary {
+    border-bottom: 1px solid currentColor;
+    padding: 0.75rem 0;
+    opacity: 0.9;
+}
+
+/* Flex container holding the individual stat spans */
+.crawl-run-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.5rem;
+    align-items: baseline;
+    margin-bottom: 0.4rem;
+}
+
+/* One labelled stat item within .crawl-run-stats */
+.crawl-run-stat {
+    font-size: 0.9em;
+}
+
+/* One feed result row within the crawl detail view */
+.crawl-detail-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    align-items: baseline;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid currentColor;
+    opacity: 0.85;
+}
+
+/* -----------------------------------------------------------------------
+   Status badges — crawl detail rows
+   ----------------------------------------------------------------------- */
+
+.status-success {
+    color: hsla(140, 50%, 65%, 1);
+    font-weight: 600;
+}
+
+.status-failed {
+    color: hsla(0, 60%, 65%, 1);
+    font-weight: 600;
+}
+
+.status-auto-disabled {
+    color: hsla(30, 80%, 60%, 1);
+    font-weight: 600;
+}
+
+/* -----------------------------------------------------------------------
+   Per-feed crawl toggle (Feeds page)
+   ----------------------------------------------------------------------- */
+
+/* Inline form holding the Enable/Disable submit button */
+.toggle-crawl-form {
+    display: inline;
+}
+
+/* The Enable/Disable button; keeps visual weight low next to other inline elements */
+.crawl-toggle {
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    color: var(--color-on-background);
+    cursor: pointer;
+    font-size: 0.8em;
+    padding: 0.1em 0.5em;
+}
+
+.crawl-toggle:hover {
+    opacity: 0.75;
+}
+
+/* Small crawl status badge shown next to each feed title */
+.crawl-status-badge {
+    display: inline-block;
+    border-radius: 3px;
+    font-size: 0.75em;
+    padding: 0.1em 0.45em;
+    vertical-align: middle;
+}
+
+.crawl-status-enabled {
+    background: hsla(140, 40%, 25%, 1);
+    color: hsla(140, 50%, 80%, 1);
+}
+
+.crawl-status-disabled {
+    background: hsla(0, 30%, 25%, 1);
+    color: hsla(0, 50%, 80%, 1);
+}

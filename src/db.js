@@ -11,6 +11,17 @@
  *   getFeedById                — returns a single feed by id, or null if not found
  *   getArticlesByFeedPaginated — returns paginated articles for a feed with optional date filtering
  *   upsertFeed                 — insert-or-update a single feed row (used by future admin endpoints)
+ *   getEnabledFeeds            — returns all feeds where no_crawl = 0 (used by crawl module)
+ *   getCrawlRuns               — returns the most recent N crawl runs (for history page)
+ *   getCrawlRunById            — returns a single crawl run by id, or null if not found
+ *   getCrawlRunDetails         — returns all crawl_run_details rows for a crawl, joined with feeds
+ *   recordCrawlRun             — inserts a new crawl_runs row at crawl completion
+ *   recordCrawlRunDetail       — inserts a row into crawl_run_details
+ *   updateFeedFailureCount     — sets consecutive_failure_count for a feed
+ *   disableFeed                — sets no_crawl = 1 and consecutive_failure_count = 0 for a feed
+ *   updateFeedCrawlStatus      — sets no_crawl to a given value for a feed (toggle endpoint)
+ *   resetFeedFailureCount      — sets consecutive_failure_count = 0 for a feed
+ *   insertArticle              — inserts a single article, ON CONFLICT DO NOTHING
  */
 
 export const PAGE_SIZE = 50;
@@ -151,5 +162,203 @@ export async function upsertFeed(db, feedData) {
 			feedData.last_build_date ?? null,
 			feedData.score ?? null
 		)
+		.run();
+}
+
+/**
+ * Return all feeds where no_crawl = 0 (crawl-enabled feeds).
+ * The crawl module needs at minimum id, xml_url, and consecutive_failure_count.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @returns {Promise<Array>}
+ */
+export async function getEnabledFeeds(db) {
+	const result = await db.prepare('SELECT * FROM feeds WHERE no_crawl = 0').all();
+	return result.results;
+}
+
+/**
+ * Return the most recent N crawl runs ordered by started_at DESC.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {number} limit - Maximum number of rows to return
+ * @returns {Promise<Array>}
+ */
+export async function getCrawlRuns(db, limit) {
+	const result = await db
+		.prepare('SELECT * FROM crawl_runs ORDER BY started_at DESC LIMIT ?')
+		.bind(limit)
+		.all();
+	return result.results;
+}
+
+/**
+ * Return a single crawl run by its id, or null if not found.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} crawlRunId - The crawl run id to look up
+ * @returns {Promise<Object|null>}
+ */
+export async function getCrawlRunById(db, crawlRunId) {
+	const row = await db.prepare('SELECT * FROM crawl_runs WHERE id = ?').bind(crawlRunId).first();
+	return row ?? null;
+}
+
+/**
+ * Return all crawl_run_details rows for a specific crawl run, LEFT JOINed with feeds
+ * to include feeds.title and feeds.hostname. If a feed has been deleted, these will be null.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} crawlRunId - The crawl run id
+ * @returns {Promise<Array>}
+ */
+export async function getCrawlRunDetails(db, crawlRunId) {
+	const sql = `
+		SELECT d.*, f.title AS feed_title, f.hostname AS feed_hostname
+		FROM crawl_run_details d
+		LEFT JOIN feeds f ON d.feed_id = f.id
+		WHERE d.crawl_run_id = ?
+	`;
+	const result = await db.prepare(sql).bind(crawlRunId).all();
+	return result.results;
+}
+
+/**
+ * Insert a new row into crawl_runs at crawl completion.
+ * The caller generates the id via crypto.randomUUID() before calling this.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {{
+ *   id: string,
+ *   startedAt: string,
+ *   completedAt: string,
+ *   totalFeedsAttempted: number,
+ *   totalFeedsFailed: number,
+ *   totalArticlesAdded: number
+ * }} crawlRun - The crawl run data to insert
+ * @returns {Promise<D1Result>}
+ */
+export async function recordCrawlRun(db, { id, startedAt, completedAt, totalFeedsAttempted, totalFeedsFailed, totalArticlesAdded }) {
+	const sql = `
+		INSERT INTO crawl_runs (id, started_at, completed_at, total_feeds_attempted, total_feeds_failed, total_articles_added)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`;
+	return db
+		.prepare(sql)
+		.bind(id, startedAt, completedAt, totalFeedsAttempted, totalFeedsFailed, totalArticlesAdded)
+		.run();
+}
+
+/**
+ * Insert a row into crawl_run_details for a single feed's result in a crawl.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {{
+ *   crawlRunId: string,
+ *   feedId: string,
+ *   status: string,
+ *   articlesAdded: number,
+ *   errorMessage: string|null,
+ *   autoDisabled: number
+ * }} detail - The crawl run detail data to insert
+ * @returns {Promise<D1Result>}
+ */
+export async function recordCrawlRunDetail(db, { crawlRunId, feedId, status, articlesAdded, errorMessage, autoDisabled }) {
+	const sql = `
+		INSERT INTO crawl_run_details (crawl_run_id, feed_id, status, articles_added, error_message, auto_disabled)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`;
+	return db
+		.prepare(sql)
+		.bind(crawlRunId, feedId, status, articlesAdded, errorMessage ?? null, autoDisabled ?? 0)
+		.run();
+}
+
+/**
+ * Set consecutive_failure_count to the given value for a feed.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id
+ * @param {number} count - The new consecutive_failure_count value
+ * @returns {Promise<D1Result>}
+ */
+export async function updateFeedFailureCount(db, feedId, count) {
+	return db
+		.prepare('UPDATE feeds SET consecutive_failure_count = ? WHERE id = ?')
+		.bind(count, feedId)
+		.run();
+}
+
+/**
+ * Disable a feed by setting no_crawl = 1 and consecutive_failure_count = 0.
+ * Resetting the count prevents re-triggering if someone queries the DB directly.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id to disable
+ * @returns {Promise<D1Result>}
+ */
+export async function disableFeed(db, feedId) {
+	return db
+		.prepare('UPDATE feeds SET no_crawl = 1, consecutive_failure_count = 0 WHERE id = ?')
+		.bind(feedId)
+		.run();
+}
+
+/**
+ * Set no_crawl to the given value for a feed (used by the toggle endpoint).
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id
+ * @param {number} noCrawl - The new no_crawl value (0 or 1)
+ * @returns {Promise<D1Result>}
+ */
+export async function updateFeedCrawlStatus(db, feedId, noCrawl) {
+	return db
+		.prepare('UPDATE feeds SET no_crawl = ? WHERE id = ?')
+		.bind(noCrawl, feedId)
+		.run();
+}
+
+/**
+ * Reset consecutive_failure_count to 0 for a feed.
+ * Called on a successful crawl or when the user manually re-enables a feed.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id
+ * @returns {Promise<D1Result>}
+ */
+export async function resetFeedFailureCount(db, feedId) {
+	return db
+		.prepare('UPDATE feeds SET consecutive_failure_count = 0 WHERE id = ?')
+		.bind(feedId)
+		.run();
+}
+
+/**
+ * Insert a single article row using ON CONFLICT(id) DO NOTHING to prevent duplicates.
+ * Returns the D1Result; use result.meta.changes to determine whether a row was actually
+ * inserted (1 = new article, 0 = duplicate).
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {{
+ *   id: string,
+ *   feedId: string,
+ *   link: string|null,
+ *   title: string|null,
+ *   published: string|null,
+ *   updated: string|null,
+ *   added: string
+ * }} article - The article data to insert
+ * @returns {Promise<D1Result>}
+ */
+export async function insertArticle(db, { id, feedId, link, title, published, updated, added }) {
+	const sql = `
+		INSERT INTO articles (id, feed_id, link, title, published, updated, added)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING
+	`;
+	return db
+		.prepare(sql)
+		.bind(id, feedId, link ?? null, title ?? null, published ?? null, updated ?? null, added)
 		.run();
 }

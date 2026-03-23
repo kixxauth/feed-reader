@@ -124,6 +124,30 @@ Once articles are imported, authenticated users can browse them at `/feeds/:feed
 
 The Feeds page (`/feeds`) includes an "Articles" link for each feed.
 
+## Feed Crawling
+
+Feeds are crawled automatically once per day to fetch new articles.
+
+**Schedule**: The crawl runs at 02:00 UTC daily. The schedule is configurable via `triggers.crons` in `wrangler.jsonc`.
+
+**Crawl history**: Authenticated users can view a history of crawl runs at `/crawl-history`. Each run shows the number of feeds attempted, feeds that failed, and articles added. Click a run to see per-feed details including any error messages.
+
+**Per-feed crawl control**: On the `/feeds` page, each feed shows its current crawl status. Use the enable/disable toggle button to turn crawling on or off for individual feeds.
+
+**Auto-disable on failure**: If a feed fails to crawl 5 consecutive times, it is automatically disabled (crawling stops for that feed). The feed is marked as disabled on the `/feeds` page. To re-enable it, use the toggle on the `/feeds` page.
+
+**New articles**: New articles fetched during a crawl appear automatically. No manual refresh is needed.
+
+**Local testing**: To trigger the scheduled crawl handler locally, start the dev server with scheduled event support and then call the scheduled endpoint:
+
+```bash
+npx wrangler dev --test-scheduled
+```
+
+```bash
+curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
+```
+
 ## Testing
 This application uses the Vitest test framework. You can find the API for writing tests at: https://vitest.dev/api/test.html
 

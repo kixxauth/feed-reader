@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import worker from '../src';
 import { createSession } from '../src/auth/session.js';
 import { createState, consumeState } from '../src/auth/state.js';
+import { performCrawl } from '../src/crawl.js';
 
 // ---------------------------------------------------------------------------
 // Helper: create an authenticated request with a valid session cookie
@@ -20,8 +21,8 @@ async function makeAuthenticatedRequest(url) {
 async function seedFeeds(feeds) {
 	for (const feed of feeds) {
 		await env.DB.prepare(
-			`INSERT INTO feeds (id, hostname, type, title, xml_url, html_url, no_crawl, description, last_build_date, score)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO feeds (id, hostname, type, title, xml_url, html_url, no_crawl, description, last_build_date, score, consecutive_failure_count)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 			.bind(
 				feed.id,
@@ -33,7 +34,8 @@ async function seedFeeds(feeds) {
 				feed.no_crawl ?? 0,
 				feed.description ?? null,
 				feed.last_build_date ?? null,
-				feed.score ?? null
+				feed.score ?? null,
+				feed.consecutive_failure_count ?? 0
 			)
 			.run();
 	}
@@ -73,6 +75,62 @@ async function seedArticles(articles) {
 // ---------------------------------------------------------------------------
 async function clearArticles() {
 	await env.DB.prepare('DELETE FROM articles').run();
+}
+
+// ---------------------------------------------------------------------------
+// Helper: clear the crawl_runs table between tests
+// ---------------------------------------------------------------------------
+async function clearCrawlRuns() {
+	await env.DB.prepare('DELETE FROM crawl_runs').run();
+}
+
+// ---------------------------------------------------------------------------
+// Helper: clear the crawl_run_details table between tests
+// ---------------------------------------------------------------------------
+async function clearCrawlRunDetails() {
+	await env.DB.prepare('DELETE FROM crawl_run_details').run();
+}
+
+// ---------------------------------------------------------------------------
+// Helper: seed the DB with sample crawl_runs rows for testing
+// ---------------------------------------------------------------------------
+async function seedCrawlRuns(runs) {
+	for (const run of runs) {
+		await env.DB.prepare(
+			`INSERT INTO crawl_runs (id, started_at, completed_at, total_feeds_attempted, total_feeds_failed, total_articles_added)
+			 VALUES (?, ?, ?, ?, ?, ?)`
+		)
+			.bind(
+				run.id,
+				run.started_at,
+				run.completed_at ?? null,
+				run.total_feeds_attempted ?? 0,
+				run.total_feeds_failed ?? 0,
+				run.total_articles_added ?? 0
+			)
+			.run();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: seed the DB with sample crawl_run_details rows for testing
+// ---------------------------------------------------------------------------
+async function seedCrawlRunDetails(details) {
+	for (const detail of details) {
+		await env.DB.prepare(
+			`INSERT INTO crawl_run_details (crawl_run_id, feed_id, status, articles_added, error_message, auto_disabled)
+			 VALUES (?, ?, ?, ?, ?, ?)`
+		)
+			.bind(
+				detail.crawl_run_id,
+				detail.feed_id,
+				detail.status,
+				detail.articles_added ?? 0,
+				detail.error_message ?? null,
+				detail.auto_disabled ?? 0
+			)
+			.run();
+	}
 }
 
 describe('Unauthenticated access', () => {
@@ -769,5 +827,530 @@ describe('OAuth callback', () => {
 
 		expect(response.status).toBe(302);
 		expect(response.headers.get('location')).toBe('/');
+	});
+});
+
+describe('Feed crawl toggle API', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+	});
+
+	it('POST /api/feeds/:feedId/toggle-crawl without session redirects to login', async () => {
+		const response = await SELF.fetch('http://example.com/api/feeds/feed-1/toggle-crawl', {
+			method: 'POST',
+			redirect: 'manual',
+		});
+		expect(response.status).toBe(302);
+		expect(response.headers.get('location')).toContain('/login?next=');
+	});
+
+	it('POST /api/feeds/:feedId/toggle-crawl disables an enabled feed', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com', no_crawl: 0 },
+		]);
+
+		const sessionRequest = await makeAuthenticatedRequest('http://example.com/api/feeds/feed-1/toggle-crawl');
+		const postRequest = new Request(sessionRequest.url, {
+			method: 'POST',
+			headers: sessionRequest.headers,
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(postRequest, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds');
+
+		// Verify no_crawl is now 1 in the database
+		const row = await env.DB.prepare('SELECT no_crawl FROM feeds WHERE id = ?').bind('feed-1').first();
+		expect(row.no_crawl).toBe(1);
+	});
+
+	it('POST /api/feeds/:feedId/toggle-crawl enables a disabled feed and resets failure count', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com', no_crawl: 1 },
+		]);
+		// Set a non-zero failure count to verify it gets reset on enable
+		await env.DB.prepare('UPDATE feeds SET consecutive_failure_count = 3 WHERE id = ?').bind('feed-1').run();
+
+		const sessionRequest = await makeAuthenticatedRequest('http://example.com/api/feeds/feed-1/toggle-crawl');
+		const postRequest = new Request(sessionRequest.url, {
+			method: 'POST',
+			headers: sessionRequest.headers,
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(postRequest, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds');
+
+		// Verify no_crawl is now 0 and consecutive_failure_count was reset to 0
+		const row = await env.DB.prepare('SELECT no_crawl, consecutive_failure_count FROM feeds WHERE id = ?').bind('feed-1').first();
+		expect(row.no_crawl).toBe(0);
+		expect(row.consecutive_failure_count).toBe(0);
+	});
+
+	it('POST /api/feeds/:feedId/toggle-crawl for nonexistent feed returns 404', async () => {
+		const sessionRequest = await makeAuthenticatedRequest('http://example.com/api/feeds/nonexistent/toggle-crawl');
+		const postRequest = new Request(sessionRequest.url, {
+			method: 'POST',
+			headers: sessionRequest.headers,
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(postRequest, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(404);
+	});
+});
+
+describe('Crawl history page', () => {
+	beforeEach(async () => {
+		await clearCrawlRuns();
+		await clearCrawlRunDetails();
+		await clearFeeds();
+	});
+
+	it('GET /crawl-history without session redirects to login', async () => {
+		const response = await SELF.fetch('http://example.com/crawl-history', { redirect: 'manual' });
+		expect(response.status).toBe(302);
+		expect(response.headers.get('location')).toBe('/login?next=%2Fcrawl-history');
+	});
+
+	it('GET /crawl-history with session shows crawl runs newest-first', async () => {
+		await seedCrawlRuns([
+			{
+				id: 'run-older',
+				started_at: '2026-03-20T02:00:00.000Z',
+				total_feeds_attempted: 5,
+				total_feeds_failed: 1,
+				total_articles_added: 10,
+			},
+			{
+				id: 'run-newer',
+				started_at: '2026-03-23T02:00:00.000Z',
+				total_feeds_attempted: 7,
+				total_feeds_failed: 0,
+				total_articles_added: 3,
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		// Both runs should appear
+		expect(body).toContain('run-newer');
+		expect(body).toContain('run-older');
+
+		// Newer run should appear before older run
+		expect(body.indexOf('run-newer')).toBeLessThan(body.indexOf('run-older'));
+	});
+
+	it('GET /crawl-history with no runs shows empty state', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('No crawl history available');
+	});
+
+	it('GET /crawl-history/:id shows per-feed details', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com' },
+		]);
+		await seedCrawlRuns([
+			{
+				id: 'run-detail-test',
+				started_at: '2026-03-23T02:00:00.000Z',
+				total_feeds_attempted: 2,
+				total_feeds_failed: 1,
+				total_articles_added: 5,
+			},
+		]);
+		await seedCrawlRunDetails([
+			{
+				crawl_run_id: 'run-detail-test',
+				feed_id: 'feed-1',
+				status: 'success',
+				articles_added: 5,
+				error_message: null,
+				auto_disabled: 0,
+			},
+			{
+				crawl_run_id: 'run-detail-test',
+				feed_id: 'feed-missing',
+				status: 'failed',
+				articles_added: 0,
+				error_message: 'HTTP 404',
+				auto_disabled: 0,
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history/run-detail-test');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		// Feed title should be shown for known feed
+		expect(body).toContain('Alpha Feed');
+		// Articles added count should appear
+		expect(body).toContain('5');
+		// Status indicators should appear
+		expect(body).toContain('success');
+		expect(body).toContain('failed');
+		// Error message for failed feed
+		expect(body).toContain('HTTP 404');
+		// Fallback to feed_id for deleted feed
+		expect(body).toContain('feed-missing');
+	});
+
+	it('GET /crawl-history/:id HTML-escapes content', async () => {
+		await seedCrawlRuns([
+			{
+				id: 'run-xss-test',
+				started_at: '2026-03-23T02:00:00.000Z',
+				total_feeds_attempted: 1,
+				total_feeds_failed: 1,
+				total_articles_added: 0,
+			},
+		]);
+		await seedCrawlRunDetails([
+			{
+				crawl_run_id: 'run-xss-test',
+				feed_id: 'feed-xss',
+				status: 'failed',
+				articles_added: 0,
+				error_message: '<script>alert("xss")</script>',
+				auto_disabled: 0,
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history/run-xss-test');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).not.toContain('<script>alert("xss")</script>');
+		expect(body).toContain('&lt;script&gt;');
+	});
+
+	it('GET /crawl-history/:badId returns 404', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history/nonexistent-run-id');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(404);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Helper: build a minimal valid RSS 2.0 feed XML string for crawl tests
+// ---------------------------------------------------------------------------
+function makeRssFeed(items = []) {
+	const itemsXml = items
+		.map(
+			({ guid, link, title, pubDate }) => `
+    <item>
+      ${guid ? `<guid>${guid}</guid>` : ''}
+      ${link ? `<link>${link}</link>` : ''}
+      ${title ? `<title>${title}</title>` : ''}
+      ${pubDate ? `<pubDate>${pubDate}</pubDate>` : ''}
+    </item>`
+		)
+		.join('');
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test Feed</title>
+    <link>https://example.com</link>
+    ${itemsXml}
+  </channel>
+</rss>`;
+}
+
+describe('Crawl functionality', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+		await clearArticles();
+		await clearCrawlRuns();
+		await clearCrawlRunDetails();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it('performCrawl fetches enabled feeds and inserts new articles', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+			},
+		]);
+
+		const rssXml = makeRssFeed([
+			{ guid: 'guid-1', link: 'https://example.com/1', title: 'Article One', pubDate: 'Thu, 23 Mar 2026 12:00:00 GMT' },
+			{ guid: 'guid-2', link: 'https://example.com/2', title: 'Article Two', pubDate: 'Wed, 22 Mar 2026 12:00:00 GMT' },
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
+		);
+
+		const summary = await performCrawl(env.DB);
+
+		// Summary reflects the inserted articles
+		expect(summary.totalFeeds).toBe(1);
+		expect(summary.totalFailed).toBe(0);
+		expect(summary.totalArticlesAdded).toBe(2);
+		expect(summary.crawlRunId).toBeTruthy();
+
+		// Articles are actually in the DB
+		const { results } = await env.DB.prepare('SELECT * FROM articles ORDER BY title').all();
+		expect(results).toHaveLength(2);
+		expect(results[0].title).toBe('Article One');
+		expect(results[1].title).toBe('Article Two');
+
+		// Crawl run is recorded
+		const { results: runs } = await env.DB.prepare('SELECT * FROM crawl_runs').all();
+		expect(runs).toHaveLength(1);
+		expect(runs[0].total_articles_added).toBe(2);
+		expect(runs[0].total_feeds_attempted).toBe(1);
+		expect(runs[0].total_feeds_failed).toBe(0);
+	});
+
+	it('performCrawl skips feeds with no_crawl = 1', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-enabled',
+				hostname: 'enabled.example.com',
+				title: 'Enabled Feed',
+				xml_url: 'https://enabled.example.com/feed.xml',
+				html_url: 'https://enabled.example.com',
+				no_crawl: 0,
+			},
+			{
+				id: 'feed-disabled',
+				hostname: 'disabled.example.com',
+				title: 'Disabled Feed',
+				xml_url: 'https://disabled.example.com/feed.xml',
+				html_url: 'https://disabled.example.com',
+				no_crawl: 1,
+			},
+		]);
+
+		const rssXml = makeRssFeed([
+			{ guid: 'guid-1', link: 'https://enabled.example.com/1', title: 'Enabled Article' },
+		]);
+
+		const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
+		);
+
+		await performCrawl(env.DB);
+
+		// Only one fetch call — the disabled feed is skipped entirely
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		const calledUrl = String(fetchSpy.mock.calls[0][0]);
+		expect(calledUrl).toContain('enabled.example.com');
+		expect(calledUrl).not.toContain('disabled.example.com');
+	});
+
+	it('performCrawl increments failure count on fetch error', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+				consecutive_failure_count: 0,
+			},
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
+
+		await performCrawl(env.DB);
+
+		// Failure count incremented to 1, feed still enabled (not auto-disabled)
+		const row = await env.DB.prepare('SELECT * FROM feeds WHERE id = ?').bind('feed-1').first();
+		expect(row.consecutive_failure_count).toBe(1);
+		expect(row.no_crawl).toBe(0);
+	});
+
+	it('performCrawl auto-disables feed after 5 consecutive failures', async () => {
+		// Feed already has 4 consecutive failures; one more triggers auto-disable
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+				consecutive_failure_count: 4,
+			},
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
+
+		await performCrawl(env.DB);
+
+		// After the 5th failure the feed should be auto-disabled.
+		// disableFeed() sets no_crawl=1 AND resets consecutive_failure_count=0.
+		const row = await env.DB.prepare('SELECT * FROM feeds WHERE id = ?').bind('feed-1').first();
+		expect(row.no_crawl).toBe(1);
+		expect(row.consecutive_failure_count).toBe(0);
+
+		// crawl_run_details should record auto_disabled=1 and status='auto_disabled'
+		const detail = await env.DB.prepare(
+			'SELECT * FROM crawl_run_details WHERE feed_id = ?'
+		).bind('feed-1').first();
+		expect(detail.auto_disabled).toBe(1);
+		expect(detail.status).toBe('auto_disabled');
+	});
+
+	it('performCrawl resets failure count to 0 on success', async () => {
+		// Feed has pre-existing failures; a successful crawl should reset the count
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+				consecutive_failure_count: 3,
+			},
+		]);
+
+		const rssXml = makeRssFeed([
+			{ guid: 'guid-1', link: 'https://example.com/1', title: 'Fresh Article' },
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
+		);
+
+		await performCrawl(env.DB);
+
+		// Failure count reset to 0 after a successful crawl
+		const row = await env.DB.prepare('SELECT * FROM feeds WHERE id = ?').bind('feed-1').first();
+		expect(row.consecutive_failure_count).toBe(0);
+		expect(row.no_crawl).toBe(0);
+	});
+
+	it('performCrawl does not duplicate articles on re-crawl', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+			},
+		]);
+
+		const rssXml = makeRssFeed([
+			{ guid: 'guid-1', link: 'https://example.com/1', title: 'Repeated Article' },
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
+		);
+
+		// Run crawl twice with identical feed content
+		await performCrawl(env.DB);
+		await performCrawl(env.DB);
+
+		// Only one article row should exist despite two crawls (ON CONFLICT DO NOTHING)
+		const { results } = await env.DB.prepare('SELECT * FROM articles').all();
+		expect(results).toHaveLength(1);
+	});
+
+	it('performCrawl stores error message on failure', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+			},
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response('Not Found', { status: 404 })
+		);
+
+		await performCrawl(env.DB);
+
+		// crawl_run_details should record the HTTP error message
+		const detail = await env.DB.prepare(
+			'SELECT * FROM crawl_run_details WHERE feed_id = ?'
+		).bind('feed-1').first();
+		expect(detail).toBeTruthy();
+		expect(detail.status).toBe('failed');
+		expect(detail.error_message).toBe('HTTP 404');
+	});
+
+	it('performCrawl returns summary with correct counts', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-ok',
+				hostname: 'ok.example.com',
+				title: 'OK Feed',
+				xml_url: 'https://ok.example.com/feed.xml',
+				html_url: 'https://ok.example.com',
+			},
+			{
+				id: 'feed-bad',
+				hostname: 'bad.example.com',
+				title: 'Bad Feed',
+				xml_url: 'https://bad.example.com/feed.xml',
+				html_url: 'https://bad.example.com',
+			},
+		]);
+
+		const rssXml = makeRssFeed([
+			{ guid: 'guid-a', link: 'https://ok.example.com/a', title: 'Article A' },
+			{ guid: 'guid-b', link: 'https://ok.example.com/b', title: 'Article B' },
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+			if (String(url).includes('ok.example.com')) {
+				return new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } });
+			}
+			// bad feed returns an HTTP error
+			return new Response('Internal Server Error', { status: 500 });
+		});
+
+		const summary = await performCrawl(env.DB);
+
+		expect(summary.totalFeeds).toBe(2);
+		expect(summary.totalFailed).toBe(1);
+		expect(summary.totalArticlesAdded).toBe(2);
+		expect(typeof summary.crawlRunId).toBe('string');
+		expect(summary.crawlRunId.length).toBeGreaterThan(0);
+
+		// Verify the crawl_runs row matches the returned summary
+		const run = await env.DB.prepare(
+			'SELECT * FROM crawl_runs WHERE id = ?'
+		).bind(summary.crawlRunId).first();
+		expect(run).toBeTruthy();
+		expect(run.total_feeds_attempted).toBe(2);
+		expect(run.total_feeds_failed).toBe(1);
+		expect(run.total_articles_added).toBe(2);
 	});
 });

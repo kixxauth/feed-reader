@@ -8,6 +8,9 @@ import { handleLogout } from './routes/logout.js';
 import { handleLoggedOut } from './routes/logged-out.js';
 import { handleFeeds } from './routes/feeds.js';
 import { handleArticles } from './routes/articles.js';
+import { handleToggleFeedCrawl } from './routes/api/toggle-feed-crawl.js';
+import { handleCrawlHistory, handleCrawlHistoryDetail } from './routes/crawl-history.js';
+import { performCrawl } from './crawl.js';
 
 const app = new Hono();
 
@@ -24,6 +27,9 @@ app.get('/logged-out', handleLoggedOut);
 // Protected routes
 app.get('/feeds', handleFeeds);
 app.get('/feeds/:feedId/articles', handleArticles);
+app.post('/api/feeds/:feedId/toggle-crawl', handleToggleFeedCrawl);
+app.get('/crawl-history', handleCrawlHistory);
+app.get('/crawl-history/:crawlRunId', handleCrawlHistoryDetail);
 
 app.get('/', (c) => {
 	const content = `<main>
@@ -40,4 +46,13 @@ app.get('/', (c) => {
 	);
 });
 
-export default app;
+export default {
+	fetch: app.fetch,
+	async scheduled(controller, env, ctx) {
+		ctx.waitUntil(
+			performCrawl(env.DB)
+				.then((summary) => console.log('Crawl completed:', JSON.stringify(summary)))
+				.catch((err) => console.error('Crawl failed:', err))
+		);
+	},
+};

@@ -39,6 +39,9 @@
 			"migrations_dir": "migrations"
 		}
 	],
+	"triggers": {
+		"crons": ["0 2 * * *"]
+	},
 	// Keep the deployed vars and don't override them with these settings.
 	"keep_vars": true,
 	"vars": {
