@@ -13,6 +13,7 @@ import { handleFeedDetail } from './routes/feed-detail.js';
 import { handleAddFeed } from './routes/api/add-feed.js';
 import { handleToggleFeedCrawl } from './routes/api/toggle-feed-crawl.js';
 import { handleCrawlHistory, handleCrawlHistoryDetail } from './routes/crawl-history.js';
+import { handleReader } from './routes/reader.js';
 import { performCrawl } from './crawl.js';
 
 const app = new Hono();
@@ -36,6 +37,7 @@ app.post('/api/feeds/add', handleAddFeed);
 app.post('/api/feeds/:feedId/toggle-crawl', handleToggleFeedCrawl);
 app.get('/crawl-history', handleCrawlHistory);
 app.get('/crawl-history/:crawlRunId', handleCrawlHistoryDetail);
+app.get('/reader', handleReader);
 
 app.get('/', (c) => {
 	const content = `<main>

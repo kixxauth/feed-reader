@@ -47,7 +47,7 @@ All incoming HTTP requests pass through `authMiddleware` (registered globally). 
 
 **Public paths** (no auth required): `/login`, `/auth/start`, `/auth/callback`, `/logout`, `/logged-out`
 
-**Protected paths** (auth required): `/`, `/feeds`, `/feeds/add`, `/feeds/:feedId`, `/feeds/:feedId/articles`, `/api/feeds/add`, `/api/feeds/:feedId/toggle-crawl`, `/crawl-history`, `/crawl-history/:crawlRunId`
+**Protected paths** (auth required): `/`, `/feeds`, `/feeds/add`, `/feeds/:feedId`, `/feeds/:feedId/articles`, `/api/feeds/add`, `/api/feeds/:feedId/toggle-crawl`, `/crawl-history`, `/crawl-history/:crawlRunId`, `/reader`
 
 ### Scheduled Job
 
@@ -261,6 +261,7 @@ The active link is determined by an internal `getActiveSection(currentPath)` hel
 - Exact match on `/` → Home is active
 - Prefix match on `/feeds` or `/api/feeds` → Feeds List is active
 - Prefix match on `/crawl-history` → Crawl History is active
+- Prefix match on `/reader` → Reader is active
 - No match or `currentPath` omitted → no active state
 
 The active link receives `aria-current="page"` and a `nav-link-active` CSS class (which applies bold font-weight and underline — providing contrast beyond color alone for WCAG compliance).
@@ -334,6 +335,21 @@ Protected. Displays articles for a single feed.
 - **Date display**: `Mar 23, 2026` format (UTC locale); NULL dates show "Date unknown"
 - **Empty state** (no articles at all): "No articles available for this feed" — filter form hidden
 - **Empty state** (filter active, no matches): Filter form shown + "No articles match the current filter"
+
+### Reader (`/reader`)
+
+Protected. Cross-feed daily article view — shows all articles across enabled feeds whose effective date matches the selected UTC day.
+
+- **Route**: `GET /reader?date=YYYY-MM-DD`
+- **Date param**: `?date=YYYY-MM-DD`; defaults to today's UTC date if absent or invalid (non-`YYYY-MM-DD`).
+- **Effective-date rule**: An article's effective date is `published` when non-null, otherwise `added`. Both `DATE('2026-03-24')` and `DATE('2026-03-24T02:00:00.000Z')` resolve to `2026-03-24` via SQLite's `DATE()` function, so the rule works for both date-only and full ISO timestamp formats.
+- **UTC interpretation**: All date selection and display uses UTC to avoid off-by-one day errors near midnight.
+- **Disabled feeds excluded**: Feeds with `no_crawl = 1` are excluded from the query.
+- **Grouping**: Articles are grouped by feed. Groups are sorted by article count descending, with feed title ascending as a tie-breaker. Within each group, articles are ordered newest-first.
+- **No pagination**: All matching articles for the day are shown. A single day across all feeds is expected to be a manageable count.
+- **Date navigation**: The page includes Previous/Next day links (always explicit `?date=` values) and a date picker form that submits `GET /reader`.
+- **Empty state**: If no articles match the selected day, a "No articles found for this date" message is shown. Date navigation controls remain visible.
+- **XSS protection**: All feed titles, article titles, and article links are HTML-escaped before rendering.
 
 ### Crawl History (`/crawl-history`)
 
@@ -765,6 +781,7 @@ feed-reader/
 │   ├── feed-utils.js         # Shared URL normalization and hostname helpers
 │   ├── html-utils.js         # escapeHtml() utility
 │   ├── parser.js             # RSS/Atom XML parser (parseFeedXml, parseFeedPreview)
+│   ├── reader-utils.js       # Date helpers for the daily reader view (parseSelectedDate, getPreviousDate, getNextDate, formatDateForDisplay)
 │   ├── styles.css            # Stylesheet (imported as text, inlined into HTML)
 │   ├── auth/
 │   │   ├── middleware.js     # Auth middleware, public paths, session throttle
@@ -781,7 +798,8 @@ feed-reader/
 │   │   ├── feeds.js          # GET /feeds
 │   │   ├── feed-detail.js    # GET /feeds/:feedId
 │   │   ├── articles.js       # GET /feeds/:feedId/articles
-│   │   └── crawl-history.js  # GET /crawl-history, GET /crawl-history/:crawlRunId
+│   │   ├── crawl-history.js  # GET /crawl-history, GET /crawl-history/:crawlRunId
+│   │   ├── reader.js         # GET /reader (daily cross-feed reader view)
 │   │   └── api/
 │   │       ├── add-feed.js           # POST /api/feeds/add
 │   │       └── toggle-feed-crawl.js  # POST /api/feeds/:feedId/toggle-crawl

@@ -2654,3 +2654,255 @@ describe('Global navigation', () => {
 		});
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Reader page — daily cross-feed article view
+// ---------------------------------------------------------------------------
+describe('Reader page', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+		await clearArticles();
+	});
+
+	// 1. Auth redirect
+	it('GET /reader without a session redirects to /login?next=...', async () => {
+		const response = await SELF.fetch('http://example.com/reader', { redirect: 'manual' });
+		expect(response.status).toBe(302);
+		expect(response.headers.get('location')).toContain('/login?next=');
+		expect(response.headers.get('location')).toContain('%2Freader');
+	});
+
+	// 2. Default date (today UTC)
+	it('GET /reader with no ?date= param returns 200 and shows date controls', async () => {
+		await seedFeeds([
+			{ id: 'feed-r1', hostname: 'example.com', title: 'Reader Feed', xml_url: 'https://example.com/feed' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		// Date controls should always be present
+		expect(body).toContain('class="reader-date-controls"');
+		expect(body).toContain('type="date"');
+	});
+
+	// 3. Explicit date
+	it('GET /reader?date=2026-01-15 returns articles matching that date', async () => {
+		await seedFeeds([
+			{ id: 'feed-r2', hostname: 'example.com', title: 'Feed R2', xml_url: 'https://example.com/r2' },
+		]);
+		await seedArticles([
+			{ id: 'art-r2-match', feed_id: 'feed-r2', title: 'Matching Article', published: '2026-01-15', added: '2026-01-15' },
+			{ id: 'art-r2-other', feed_id: 'feed-r2', title: 'Other Day Article', published: '2026-01-16', added: '2026-01-16' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-01-15');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Matching Article');
+		expect(body).not.toContain('Other Day Article');
+	});
+
+	// 4. Effective-date rule — published preferred
+	it('uses published date (not added) when both are present and different', async () => {
+		await seedFeeds([
+			{ id: 'feed-r3', hostname: 'example.com', title: 'Feed R3', xml_url: 'https://example.com/r3' },
+		]);
+		// published = 2026-02-10, added = 2026-02-11 — article should appear on 2026-02-10
+		await seedArticles([
+			{
+				id: 'art-r3-pub',
+				feed_id: 'feed-r3',
+				title: 'Published Day Article',
+				published: '2026-02-10',
+				added: '2026-02-11',
+			},
+		]);
+
+		// Request the published day — article should appear
+		const req1 = await makeAuthenticatedRequest('http://example.com/reader?date=2026-02-10');
+		const ctx1 = createExecutionContext();
+		const res1 = await worker.fetch(req1, env, ctx1);
+		await waitOnExecutionContext(ctx1);
+		expect(await res1.text()).toContain('Published Day Article');
+
+		// Request the added day — article should NOT appear (published takes precedence)
+		const req2 = await makeAuthenticatedRequest('http://example.com/reader?date=2026-02-11');
+		const ctx2 = createExecutionContext();
+		const res2 = await worker.fetch(req2, env, ctx2);
+		await waitOnExecutionContext(ctx2);
+		expect(await res2.text()).not.toContain('Published Day Article');
+	});
+
+	// 5. Effective-date rule — added fallback when published is null
+	it('falls back to added date when published is null', async () => {
+		await seedFeeds([
+			{ id: 'feed-r4', hostname: 'example.com', title: 'Feed R4', xml_url: 'https://example.com/r4' },
+		]);
+		await seedArticles([
+			{
+				id: 'art-r4-added',
+				feed_id: 'feed-r4',
+				title: 'Added Fallback Article',
+				published: null,
+				added: '2026-03-05',
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-03-05');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Added Fallback Article');
+	});
+
+	// 6. Disabled feeds excluded
+	it('does not show articles from feeds with no_crawl = 1', async () => {
+		await seedFeeds([
+			{ id: 'feed-enabled', hostname: 'enabled.example.com', title: 'Enabled Feed', xml_url: 'https://enabled.example.com/feed', no_crawl: 0 },
+			{ id: 'feed-disabled', hostname: 'disabled.example.com', title: 'Disabled Feed', xml_url: 'https://disabled.example.com/feed', no_crawl: 1 },
+		]);
+		await seedArticles([
+			{ id: 'art-enabled', feed_id: 'feed-enabled', title: 'Enabled Article', published: '2026-04-01', added: '2026-04-01' },
+			{ id: 'art-disabled', feed_id: 'feed-disabled', title: 'Disabled Article', published: '2026-04-01', added: '2026-04-01' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-04-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Enabled Article');
+		expect(body).not.toContain('Disabled Article');
+	});
+
+	// 7. Grouping by feed — multiple feeds' titles appear as linked section headings
+	it('groups articles by feed and links each feed title to its detail page', async () => {
+		await seedFeeds([
+			{ id: 'feed-ga', hostname: 'alpha.example.com', title: 'Alpha Feed', xml_url: 'https://alpha.example.com/feed' },
+			{ id: 'feed-gb', hostname: 'beta.example.com', title: 'Beta Feed', xml_url: 'https://beta.example.com/feed' },
+		]);
+		await seedArticles([
+			{ id: 'art-ga1', feed_id: 'feed-ga', title: 'Alpha Article', published: '2026-05-01', added: '2026-05-01' },
+			{ id: 'art-gb1', feed_id: 'feed-gb', title: 'Beta Article', published: '2026-05-01', added: '2026-05-01' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-05-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Alpha Feed');
+		expect(body).toContain('Beta Feed');
+		expect(body).toContain('href="/feeds/feed-ga"');
+		expect(body).toContain('href="/feeds/feed-gb"');
+		expect(body).toContain('Alpha Article');
+		expect(body).toContain('Beta Article');
+		expect(body).toContain('reader-feed-group');
+	});
+
+	// 8. Group ordering — feed with more articles appears first
+	it('orders feed groups by article count descending', async () => {
+		await seedFeeds([
+			{ id: 'feed-few', hostname: 'few.example.com', title: 'Few Articles Feed', xml_url: 'https://few.example.com/feed' },
+			{ id: 'feed-many', hostname: 'many.example.com', title: 'Many Articles Feed', xml_url: 'https://many.example.com/feed' },
+		]);
+		await seedArticles([
+			{ id: 'art-few-1', feed_id: 'feed-few', title: 'Few Article One', published: '2026-06-01', added: '2026-06-01' },
+			{ id: 'art-many-1', feed_id: 'feed-many', title: 'Many Article One', published: '2026-06-01', added: '2026-06-01' },
+			{ id: 'art-many-2', feed_id: 'feed-many', title: 'Many Article Two', published: '2026-06-01', added: '2026-06-01' },
+			{ id: 'art-many-3', feed_id: 'feed-many', title: 'Many Article Three', published: '2026-06-01', added: '2026-06-01' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-06-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		// Many Articles Feed (3 articles) should appear before Few Articles Feed (1 article)
+		expect(body.indexOf('Many Articles Feed')).toBeLessThan(body.indexOf('Few Articles Feed'));
+	});
+
+	// 9. Article ordering within group — newest first
+	it('orders articles within a feed group newest first', async () => {
+		await seedFeeds([
+			{ id: 'feed-order', hostname: 'order.example.com', title: 'Order Feed', xml_url: 'https://order.example.com/feed' },
+		]);
+		await seedArticles([
+			{ id: 'art-order-old', feed_id: 'feed-order', title: 'Old Article', published: '2026-07-01T06:00:00.000Z', added: '2026-07-01T06:00:00.000Z' },
+			{ id: 'art-order-new', feed_id: 'feed-order', title: 'New Article', published: '2026-07-01T20:00:00.000Z', added: '2026-07-01T20:00:00.000Z' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-07-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		// Newer article should appear before the older one
+		expect(body.indexOf('New Article')).toBeLessThan(body.indexOf('Old Article'));
+	});
+
+	// 10. Previous/next links
+	it('renders previous and next day links with correct ?date= values', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-08-15');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/reader?date=2026-08-14"');
+		expect(body).toContain('href="/reader?date=2026-08-16"');
+	});
+
+	// 11. Empty state
+	it('shows "No articles found" message when no articles match the date, with date controls visible', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-09-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('No articles found for this date');
+		// Date controls still present in empty state
+		expect(body).toContain('class="reader-date-controls"');
+		// No feed-group section elements (the CSS class appears in the stylesheet, so check for the element tag)
+		expect(body).not.toContain('<section class="reader-feed-group">');
+	});
+
+	// 12. Nav link — Reader link present in header
+	it('contains a "Reader" nav link pointing to /reader', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-01-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/reader"');
+		expect(body).toContain('>Reader<');
+	});
+
+	// Active nav link on /reader
+	it('marks Reader as the active nav link when visiting /reader', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-01-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		const body = await response.text();
+		const activePattern = /href="\/reader"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/reader"/;
+		expect(body).toMatch(activePattern);
+	});
+});

@@ -26,6 +26,7 @@
  *   insertArticle              — inserts a single article, ON CONFLICT DO NOTHING
  *   getRecentActivityForFeed   — returns the most recent N crawl_run_details rows for a feed, joined with crawl_runs
  *   getCrawlRunDetailByFeed    — returns one crawl_run_details row for a crawl run + feed pair
+ *   getDailyReaderArticles     — returns flat joined rows for all enabled-feed articles on a given UTC day
  */
 
 import { canonicalizeHttpUrl, normalizeUrlForComparison } from './feed-utils.js';
@@ -110,12 +111,14 @@ export async function getArticlesByFeedPaginated(db, feedId, page, fromDate, toD
 	const bindings = [feedId];
 
 	if (fromDate !== null && fromDate !== undefined) {
-		conditions.push('published >= ?');
+		// DATE() normalizes both 'YYYY-MM-DD' and 'YYYY-MM-DDTHH:MM:SS.mmmZ' to 'YYYY-MM-DD'
+		// so the comparison is correct regardless of which format is stored in the column.
+		conditions.push('DATE(published) >= ?');
 		bindings.push(fromDate);
 	}
 
 	if (toDate !== null && toDate !== undefined) {
-		conditions.push('published <= ?');
+		conditions.push('DATE(published) <= ?');
 		bindings.push(toDate);
 	}
 
@@ -481,4 +484,47 @@ export async function getCrawlRunDetailByFeed(db, crawlRunId, feedId) {
 		.bind(crawlRunId, feedId)
 		.first();
 	return row ?? null;
+}
+
+/**
+ * Return all articles for a given UTC day across all enabled feeds, as flat joined rows.
+ *
+ * The effective date of an article is `published` when present, else `added`
+ * (the "published preferred, added fallback" rule). SQLite's DATE() extracts
+ * YYYY-MM-DD from both date-only strings ('2026-03-24') and full ISO timestamps
+ * ('2026-03-24T02:00:00.000Z'), so the same function works for both formats.
+ *
+ * Disabled feeds (no_crawl = 1) are excluded. The route handler groups the flat
+ * rows by feed_id in JavaScript and sorts groups by article count descending.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} selectedDate - A YYYY-MM-DD string for the day to query
+ * @returns {Promise<Array<{
+ *   feed_id: string,
+ *   feed_title: string,
+ *   article_id: string,
+ *   article_title: string|null,
+ *   article_link: string|null,
+ *   article_published: string|null,
+ *   article_added: string|null
+ * }>>}
+ */
+export async function getDailyReaderArticles(db, selectedDate) {
+	const sql = `
+		SELECT
+			feeds.id AS feed_id,
+			feeds.title AS feed_title,
+			articles.id AS article_id,
+			articles.title AS article_title,
+			articles.link AS article_link,
+			articles.published AS article_published,
+			articles.added AS article_added
+		FROM articles
+		JOIN feeds ON articles.feed_id = feeds.id
+		WHERE feeds.no_crawl = 0
+		  AND DATE(COALESCE(articles.published, articles.added)) = ?
+		ORDER BY feeds.title ASC, COALESCE(articles.published, articles.added) DESC, articles.id ASC
+	`;
+	const result = await db.prepare(sql).bind(selectedDate).all();
+	return result.results;
 }

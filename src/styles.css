@@ -504,3 +504,65 @@ header nav[aria-label="Account"] a:focus-visible {
     opacity: 0.9;
     text-decoration: none;
 }
+
+/* -----------------------------------------------------------------------
+   Daily reader view
+   ----------------------------------------------------------------------- */
+
+/* Horizontal flex row containing the date picker, prev/next links, and submit */
+.reader-date-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: center;
+    margin: 1rem 0 1.5rem;
+}
+
+.reader-date-controls input[type="date"] {
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    color: inherit;
+    padding: 0.3rem 0.5rem;
+}
+
+.reader-date-controls form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+/* Container for one feed's section — subtle border separates groups */
+.reader-feed-group {
+    border-top: 1px solid currentColor;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    opacity: 0.95;
+}
+
+/* Feed title + article count heading */
+.reader-feed-group-header {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem;
+}
+
+/* Article count badge within the group header */
+.reader-article-count {
+    font-weight: 400;
+    opacity: 0.65;
+    font-size: 0.9em;
+}
+
+/* Article list within a feed group — reuses .article-list/.article-item/.article-date */
+.reader-article-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+/* Empty state message */
+.reader-empty-state {
+    opacity: 0.7;
+    margin-top: 1.5rem;
+}

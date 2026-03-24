@@ -37,9 +37,11 @@ Focus on:
 - Environment variables, config values, or setup steps required
 - Known limitations and unhandled edge cases
 
-For each piece of documentation, recommend where it should live: inline comments, a module-level doc, an update to an existing doc, or a new standalone file.
+For each piece of documentation, decide where it should live: inline comments, a module-level doc, an update to MANUAL.md, and put it there.
 
 Write for a future developer or AI assistant with no context about this session. Assume they can read the code — focus on the *why*, the tradeoffs, and anything that isn't visible from the code alone.
+
+The MANUAL.md doc is for users, admins, and developer operations, so write for them there.
 
 ## 6. Smoke test checklist
 
