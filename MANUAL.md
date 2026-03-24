@@ -551,6 +551,28 @@ npm run import-articles -- --env remote path/to/source.sqlite
 
 **Critical**: The `published` column in the source **must be ISO 8601 text** (`YYYY-MM-DD` or `YYYY-MM-DDThh:mm:ssZ`). Date filtering depends on lexicographic string comparison. Unix timestamps or other formats will produce incorrect filtering results and must be converted before import.
 
+### Recover Failed Feeds
+
+`scripts/recover-failed-feeds.js` is a maintenance script for recovering feeds that have been failing to crawl, typically because a feed moved to a new URL. For each feed that failed in the most recent crawl run, it:
+
+1. Fetches the feed's `html_url` (the associated website) and runs feed discovery on it.
+2. If a new (different) `xml_url` is found and parses successfully, updates the feed record in the database.
+3. Inserts any articles found in the new feed (skipping duplicates).
+4. Resets `consecutive_failure_count` to 0 and re-enables the feed if it was auto-disabled.
+
+```bash
+# Dry run — discover and report, no DB changes
+node scripts/recover-failed-feeds.js --env local --dry-run
+
+# Apply changes to local D1
+node scripts/recover-failed-feeds.js --env local
+
+# Apply changes to production D1
+node scripts/recover-failed-feeds.js --env remote
+```
+
+Feeds with no `html_url`, unreachable websites, or websites with no discoverable feed are skipped and logged. The script prints a per-feed summary and a final count of recovered, skipped, and errored feeds.
+
 ---
 
 ## 10. Testing
@@ -703,8 +725,9 @@ feed-reader/
 │   ├── 0005_create_crawl_run_details_table.sql
 │   └── 0006_add_unique_index_on_feed_xml_url.sql
 ├── scripts/
-│   ├── import-feeds.js       # CLI: bulk import feeds from SQLite
-│   └── import-articles.js    # CLI: bulk import articles from SQLite
+│   ├── import-feeds.js           # CLI: bulk import feeds from SQLite
+│   ├── import-articles.js        # CLI: bulk import articles from SQLite
+│   └── recover-failed-feeds.js   # CLI: re-discover and repair feeds that failed the last crawl
 ├── test/
 │   └── index.spec.js         # All test cases
 ├── plans/                    # Implementation plans (historical reference)

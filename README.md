@@ -98,6 +98,21 @@ npx wrangler dev --test-scheduled
 curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
 ```
 
+## Recover Failed Feeds
+
+`scripts/recover-failed-feeds.js` examines feeds that failed in the most recent crawl run and attempts to find a new working feed URL by scraping each feed's website. If a new URL is found and parses successfully, the script updates `xml_url` in the database, inserts new articles, and re-enables the feed if it was auto-disabled.
+
+```bash
+# Dry run — discover and report, no DB changes
+node scripts/recover-failed-feeds.js --env local --dry-run
+
+# Apply changes to local D1
+node scripts/recover-failed-feeds.js --env local
+
+# Apply changes to production D1
+node scripts/recover-failed-feeds.js --env remote
+```
+
 ## Template Hydration
 
 The `scripts/hydrate-template.js` utility substitutes `{{variable}}` placeholders in template files with values from a YAML context file. This is useful for generating configuration files or documents from templates.
