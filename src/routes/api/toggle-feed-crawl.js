@@ -7,8 +7,10 @@
  *   and also resets consecutive_failure_count to 0 so the feed gets a fresh
  *   start rather than immediately tripping the auto-disable threshold again.
  *
- * Follows the POST-redirect-GET pattern: on success, redirects to /feeds
- * with a 303 (See Other) status so a browser back/refresh does not re-POST.
+ * Follows the POST-redirect-GET pattern: on success, redirects with a 303
+ * (See Other) status so a browser back/refresh does not re-POST. The redirect
+ * target is taken from the `returnTo` POST body field (must start with /feeds),
+ * defaulting to /feeds if absent or invalid.
  *
  * Auth: protected by authMiddleware in src/index.js (no PUBLIC_PATHS entry).
  */
@@ -43,6 +45,13 @@ export async function handleToggleFeedCrawl(c) {
 		await resetFeedFailureCount(c.env.DB, feedId);
 	}
 
-	// POST-redirect-GET: redirect to /feeds so back/refresh doesn't re-POST
-	return c.redirect('/feeds', 303);
+	// Read returnTo from POST body and validate it starts with /feeds
+	const body = await c.req.parseBody();
+	const rawReturnTo = body['returnTo'];
+	const returnTo = (typeof rawReturnTo === 'string' && rawReturnTo.startsWith('/feeds'))
+		? rawReturnTo
+		: '/feeds';
+
+	// POST-redirect-GET: redirect so back/refresh doesn't re-POST
+	return c.redirect(returnTo, 303);
 }

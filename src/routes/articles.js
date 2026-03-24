@@ -47,6 +47,10 @@ export async function handleArticles(c) {
 	const fromDate = rawFrom && DATE_PARAM_REGEX.test(rawFrom) ? rawFrom : null;
 	const toDate = rawTo && DATE_PARAM_REGEX.test(rawTo) ? rawTo : null;
 
+	const rawListPage = parseInt(c.req.query('listPage'), 10);
+	const listPage = isNaN(rawListPage) || rawListPage < 1 ? 1 : rawListPage;
+	const listDisabled = c.req.query('disabled') === '1';
+
 	// Fetch articles — may need a second call if page is out of bounds
 	let { articles, total } = await getArticlesByFeedPaginated(
 		c.env.DB,
@@ -72,13 +76,18 @@ export async function handleArticles(c) {
 
 	const filtersActive = fromDate !== null || toDate !== null;
 
+	const listParams = [];
+	if (listPage > 1) listParams.push(`page=${listPage}`);
+	if (listDisabled) listParams.push('disabled=1');
+	const backToFeedsHref = listParams.length > 0 ? `/feeds?${listParams.join('&')}` : '/feeds';
+
 	let content;
 
 	if (total === 0 && !filtersActive) {
 		// Empty state: no articles at all for this feed
 		content = `<main>
   <h1>${escapeHtml(feed.title)}</h1>
-  <a href="/feeds">Back to Feeds</a>
+  <a href="${backToFeedsHref}">Back to Feeds</a>
   <p>No articles available for this feed</p>
 </main>`;
 	} else if (total === 0 && filtersActive) {
@@ -86,7 +95,7 @@ export async function handleArticles(c) {
 		const filterForm = buildFilterForm(feedId, fromDate, toDate);
 		content = `<main>
   <h1>${escapeHtml(feed.title)}</h1>
-  <a href="/feeds">Back to Feeds</a>
+  <a href="${backToFeedsHref}">Back to Feeds</a>
   ${filterForm}
   <p>No articles match the current filter</p>
 </main>`;
@@ -120,6 +129,8 @@ export async function handleArticles(c) {
 		const filterParts = [];
 		if (fromDate !== null) filterParts.push(`from=${encodeURIComponent(fromDate)}`);
 		if (toDate !== null) filterParts.push(`to=${encodeURIComponent(toDate)}`);
+		if (listPage > 1) filterParts.push(`listPage=${listPage}`);
+		if (listDisabled) filterParts.push('disabled=1');
 		const filterQs = filterParts.join('&');
 
 		const prevLink =
@@ -134,7 +145,7 @@ export async function handleArticles(c) {
 
 		content = `<main>
   <h1>${escapeHtml(feed.title)}</h1>
-  <a href="/feeds">Back to Feeds</a>
+  <a href="${backToFeedsHref}">Back to Feeds</a>
   ${filterForm}
   <ul class="article-list">
 ${items}

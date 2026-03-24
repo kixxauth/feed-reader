@@ -7,7 +7,7 @@
  * Exports:
  *   PAGE_SIZE                  — feeds per page (50), used by route handlers for pagination math
  *   ARTICLES_PAGE_SIZE         — articles per page (20), used by articles route handler
- *   getFeedsPaginated          — returns one page of feeds plus the total count
+ *   getFeedsPaginated          — returns one page of feeds plus the total count; accepts optional { disabledOnly } to filter to no_crawl = 1
  *   getFeedById                — returns a single feed by id, or null if not found
  *   getArticlesByFeedPaginated — returns paginated articles for a feed with optional date filtering
  *   upsertFeed                 — insert-or-update a single feed row (used by future admin endpoints)
@@ -22,6 +22,7 @@
  *   updateFeedCrawlStatus      — sets no_crawl to a given value for a feed (toggle endpoint)
  *   resetFeedFailureCount      — sets consecutive_failure_count = 0 for a feed
  *   insertArticle              — inserts a single article, ON CONFLICT DO NOTHING
+ *   getRecentActivityForFeed   — returns the most recent N crawl_run_details rows for a feed, joined with crawl_runs
  */
 
 export const PAGE_SIZE = 50;
@@ -32,17 +33,21 @@ export const ARTICLES_PAGE_SIZE = 20;
  *
  * @param {D1Database} db - The D1 database binding
  * @param {number} page - 1-indexed page number (clamped to 1 if < 1)
+ * @param {{ disabledOnly?: boolean }} [options] - Optional filter options
+ * @param {boolean} [options.disabledOnly=false] - When true, only return feeds where no_crawl = 1
  * @returns {Promise<{ feeds: Array, total: number }>}
  */
-export async function getFeedsPaginated(db, page) {
+export async function getFeedsPaginated(db, page, { disabledOnly = false } = {}) {
 	const clampedPage = Math.max(1, page);
 	const offset = (clampedPage - 1) * PAGE_SIZE;
 
-	const countRow = await db.prepare('SELECT COUNT(*) AS total FROM feeds').first();
+	const whereClause = disabledOnly ? ' WHERE no_crawl = 1' : '';
+
+	const countRow = await db.prepare(`SELECT COUNT(*) AS total FROM feeds${whereClause}`).first();
 	const total = countRow.total;
 
 	const result = await db
-		.prepare('SELECT * FROM feeds ORDER BY hostname ASC LIMIT ? OFFSET ?')
+		.prepare(`SELECT * FROM feeds${whereClause} ORDER BY hostname ASC LIMIT ? OFFSET ?`)
 		.bind(PAGE_SIZE, offset)
 		.all();
 
@@ -361,4 +366,32 @@ export async function insertArticle(db, { id, feedId, link, title, published, up
 		.prepare(sql)
 		.bind(id, feedId, link ?? null, title ?? null, published ?? null, updated ?? null, added)
 		.run();
+}
+
+/**
+ * Return the most recent crawl activity rows for a specific feed, ordered newest-first.
+ * Each row combines columns from crawl_run_details and the associated crawl_runs row.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id to query activity for
+ * @param {number} [limit=5] - Maximum number of rows to return
+ * @returns {Promise<Array<{
+ *   started_at: string,
+ *   status: string,
+ *   articles_added: number,
+ *   error_message: string|null,
+ *   auto_disabled: number
+ * }>>} Array of recent crawl activity rows, empty when no history exists
+ */
+export async function getRecentActivityForFeed(db, feedId, limit = 5) {
+	const sql = `
+		SELECT r.started_at, d.status, d.articles_added, d.error_message, d.auto_disabled
+		FROM crawl_run_details d
+		JOIN crawl_runs r ON d.crawl_run_id = r.id
+		WHERE d.feed_id = ?
+		ORDER BY r.started_at DESC
+		LIMIT ?
+	`;
+	const result = await db.prepare(sql).bind(feedId, limit).all();
+	return result.results;
 }

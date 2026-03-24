@@ -258,3 +258,70 @@ p, li, h1, h2, h3, h4, h5, h6 {
     background: hsla(0, 30%, 25%, 1);
     color: hsla(0, 50%, 80%, 1);
 }
+
+/* -----------------------------------------------------------------------
+   Feed detail page and filter UI
+   ----------------------------------------------------------------------- */
+
+/* Outer container for the feed detail page */
+.feed-detail {
+    max-width: 800px;
+}
+
+/* Section for general feed info (title, hostname, URL, description) */
+.feed-meta {
+    display: block;
+}
+
+/* Section for admin info — visually distinct from .feed-meta */
+.feed-admin-meta {
+    border-top: 1px solid currentColor;
+    opacity: 0.85;
+}
+
+/* A key-value pair row within .feed-meta or .feed-admin-meta */
+.feed-meta-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+}
+
+/* The label part of a meta row */
+.feed-meta-label {
+    opacity: 0.7;
+    font-size: 0.85em;
+}
+
+/* Compact list for recent crawl activity */
+.recent-activity-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+/* One row in the recent activity list */
+.recent-activity-item {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    align-items: baseline;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid currentColor;
+    opacity: 0.85;
+}
+
+/* Action row for links/buttons */
+.feed-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 1.5rem;
+}
+
+/* Filter control above the feeds list */
+.feed-filter {
+    margin-bottom: 1rem;
+    font-size: 0.9em;
+    opacity: 0.85;
+}

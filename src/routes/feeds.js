@@ -6,10 +6,14 @@
  * - Page numbers are 1-indexed in URLs (?page=1, ?page=2, …).
  * - Out-of-bounds pages (< 1 or > totalPages) are clamped silently with a 200
  *   response — no redirect. This avoids redirect loops and keeps URLs clean.
- * - The handler runs one COUNT query directly before calling getFeedsPaginated,
- *   which runs a second COUNT internally. This is a minor redundancy kept
- *   intentionally so getFeedsPaginated stays self-contained and testable
- *   independently of the handler's clamping logic.
+ * - getFeedsPaginated returns both the page of feeds and the total count.
+ *   If the requested page exceeds totalPages the handler clamps and re-fetches,
+ *   matching the same pattern used by the articles handler.
+ *
+ * Query params:
+ * - page: 1-indexed page number
+ * - disabled: when '1', filter to disabled (no_crawl = 1) feeds only; absent
+ *   (or any value other than '1') shows all feeds
  *
  * Auth: protected by authMiddleware in src/index.js (no PUBLIC_PATHS entry).
  */
@@ -22,59 +26,93 @@ export async function handleFeeds(c) {
 	const rawPage = parseInt(c.req.query('page'), 10);
 	let page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
 
-	// Count first to clamp out-of-bounds page values
-	const countRow = await c.env.DB.prepare('SELECT COUNT(*) AS total FROM feeds').first();
-	const total = countRow.total;
+	const disabled = c.req.query('disabled') === '1';
+
+	let { feeds, total } = await getFeedsPaginated(c.env.DB, page, { disabledOnly: disabled });
 	const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
 	if (total > 0 && page > totalPages) {
 		page = totalPages;
+		({ feeds } = await getFeedsPaginated(c.env.DB, page, { disabledOnly: disabled }));
 	}
 
-	const { feeds } = await getFeedsPaginated(c.env.DB, page);
+	const disabledParam = disabled ? '?disabled=1' : '';
 
 	let content;
 	if (total === 0) {
+		const emptyMessage = disabled
+			? `<p>No disabled feeds. <a href="/feeds">Clear filter</a></p>`
+			: `<p>No feeds available</p>`;
 		content = `<main>
   <h1>Feeds</h1>
-  <p>No feeds available</p>
+  ${emptyMessage}
 </main>`;
 	} else {
+		const filterControl = disabled
+			? `<p class="feed-filter">Showing disabled feeds only — <a href="/feeds">Clear filter</a></p>`
+			: `<p class="feed-filter"><a href="/feeds?disabled=1">Show disabled only</a></p>`;
+
 		const items = feeds
 			.map((feed) => {
 				const title = escapeHtml(feed.title);
 				const hostname = escapeHtml(feed.hostname);
-				const htmlUrl = escapeHtml(feed.html_url);
 				const feedId = escapeHtml(feed.id);
 				const noCrawl = feed.no_crawl;
 				const crawlBadge = noCrawl
 					? `<span class="crawl-status-badge crawl-status-disabled">Disabled</span>`
 					: `<span class="crawl-status-badge crawl-status-enabled">Crawling</span>`;
 				const toggleButtonLabel = noCrawl ? 'Enable' : 'Disable';
+
+				// Build detail href with optional listPage and disabled params
+				let detailHref = `/feeds/${feedId}`;
+				if (page > 1 && disabled) {
+					detailHref += `?listPage=${page}&disabled=1`;
+				} else if (page > 1) {
+					detailHref += `?listPage=${page}`;
+				} else if (disabled) {
+					detailHref += `?disabled=1`;
+				}
+
+				// Visit Website link — only when html_url is not null
+				const visitWebsiteLink =
+					feed.html_url
+						? `<a href="${escapeHtml(feed.html_url)}" target="_blank" rel="noopener noreferrer">Visit Website</a>`
+						: '';
+
 				return `<li class="feed-item">
-    <a href="${htmlUrl}" target="_blank" rel="noopener noreferrer">${title}</a>
+    <a href="${detailHref}">${title}</a>
     <span class="feed-hostname">${hostname}</span>
     ${crawlBadge}
-    <a href="/feeds/${feedId}/articles">Articles</a>
+    ${visitWebsiteLink}
     <form method="POST" action="/api/feeds/${feedId}/toggle-crawl" class="toggle-crawl-form">
+      <input type="hidden" name="returnTo" value="/feeds${disabledParam}">
       <button type="submit">${toggleButtonLabel}</button>
     </form>
   </li>`;
 			})
 			.join('\n');
 
-		const prevLink =
-			page === 1
-				? `<a aria-disabled="true">Previous</a>`
-				: `<a href="/feeds?page=${page - 1}">Previous</a>`;
+		let prevLink;
+		if (page === 1) {
+			prevLink = `<a aria-disabled="true">Previous</a>`;
+		} else if (disabled) {
+			prevLink = `<a href="/feeds?disabled=1&page=${page - 1}">Previous</a>`;
+		} else {
+			prevLink = `<a href="/feeds?page=${page - 1}">Previous</a>`;
+		}
 
-		const nextLink =
-			page === totalPages
-				? `<a aria-disabled="true">Next</a>`
-				: `<a href="/feeds?page=${page + 1}">Next</a>`;
+		let nextLink;
+		if (page === totalPages) {
+			nextLink = `<a aria-disabled="true">Next</a>`;
+		} else if (disabled) {
+			nextLink = `<a href="/feeds?disabled=1&page=${page + 1}">Next</a>`;
+		} else {
+			nextLink = `<a href="/feeds?page=${page + 1}">Next</a>`;
+		}
 
 		content = `<main>
   <h1>Feeds</h1>
+  ${filterControl}
   <ul class="feed-list">
 ${items}
   </ul>

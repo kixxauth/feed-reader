@@ -8,6 +8,7 @@ import { handleLogout } from './routes/logout.js';
 import { handleLoggedOut } from './routes/logged-out.js';
 import { handleFeeds } from './routes/feeds.js';
 import { handleArticles } from './routes/articles.js';
+import { handleFeedDetail } from './routes/feed-detail.js';
 import { handleToggleFeedCrawl } from './routes/api/toggle-feed-crawl.js';
 import { handleCrawlHistory, handleCrawlHistoryDetail } from './routes/crawl-history.js';
 import { performCrawl } from './crawl.js';
@@ -27,6 +28,7 @@ app.get('/logged-out', handleLoggedOut);
 // Protected routes
 app.get('/feeds', handleFeeds);
 app.get('/feeds/:feedId/articles', handleArticles);
+app.get('/feeds/:feedId', handleFeedDetail);
 app.post('/api/feeds/:feedId/toggle-crawl', handleToggleFeedCrawl);
 app.get('/crawl-history', handleCrawlHistory);
 app.get('/crawl-history/:crawlRunId', handleCrawlHistoryDetail);

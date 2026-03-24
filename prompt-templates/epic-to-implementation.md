@@ -1,10 +1,10 @@
 I have an epic document (collection of user stories related to a new feature) for this website at
 
-./prompts/feed-crawling-epic.md
+./user-stories/{{ epic_filename }}
 
 After reviewing the user stories and acceptance criteria in this epic, create an implementation plan document.
 
-Before writing the implementation plan, explore the repository structure and review the relevant source files so that file paths, module names, and technical references in the plan are grounded in the actual codebase. Review the completed implementation plans in ./plans/ to get the history of what has been done before.
+Before writing the implementation plan, explore the ./MANUAL.md and review the relevant source files so that file paths, module names, and technical references in the plan are grounded in the actual codebase.
 
 Review all user stories and acceptance criteria in the epic document and think about how you would implement them cohesively. Then create an implementation plan document.
 

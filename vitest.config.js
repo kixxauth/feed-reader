@@ -8,6 +8,7 @@ export default defineWorkersConfig(async () => {
 
 	return {
 		test: {
+			globalSetup: ['./test/global-setup.js'],
 			setupFiles: ['./test/setup.js'],
 			poolOptions: {
 				workers: {

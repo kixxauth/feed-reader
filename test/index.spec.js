@@ -386,7 +386,7 @@ describe('Feeds page', () => {
 		expect(body).toContain('Page 1 of 1');
 	});
 
-	it('GET /feeds page shows articles link for each feed', async () => {
+	it('GET /feeds page shows detail page link for each feed', async () => {
 		await seedFeeds([
 			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com' },
 			{ id: 'feed-2', hostname: 'beta.example.com', title: 'Beta Feed', html_url: 'https://beta.example.com' },
@@ -398,8 +398,8 @@ describe('Feeds page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('href="/feeds/feed-1/articles"');
-		expect(body).toContain('href="/feeds/feed-2/articles"');
+		expect(body).toContain('href="/feeds/feed-1"');
+		expect(body).toContain('href="/feeds/feed-2"');
 	});
 });
 
@@ -1352,5 +1352,466 @@ describe('Crawl functionality', () => {
 		expect(run.total_feeds_attempted).toBe(2);
 		expect(run.total_feeds_failed).toBe(1);
 		expect(run.total_articles_added).toBe(2);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Feed detail page
+// ---------------------------------------------------------------------------
+describe('Feed detail page', () => {
+	const baseFeed = {
+		id: 'feed-1',
+		hostname: 'example.com',
+		title: 'Example Feed',
+		html_url: 'https://example.com',
+		xml_url: 'https://example.com/feed.xml',
+		description: 'A test feed',
+		no_crawl: 0,
+		consecutive_failure_count: 2,
+		score: 42,
+	};
+
+	beforeEach(async () => {
+		await clearCrawlRunDetails();
+		await clearCrawlRuns();
+		await clearFeeds();
+		await seedFeeds([baseFeed]);
+	});
+
+	it('GET /feeds/feed-1 returns 200 and contains the feed title as <h1>', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('<h1>Example Feed</h1>');
+	});
+
+	it('GET /feeds/feed-1 contains the hostname', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('example.com');
+	});
+
+	it('GET /feeds/feed-1 contains "View Articles" link to /feeds/feed-1/articles', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/feeds/feed-1/articles"');
+		expect(body).toContain('View Articles');
+	});
+
+	it('GET /feeds/feed-1 contains "Back to Feeds" link to /feeds', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/feeds"');
+		expect(body).toContain('Back to Feeds');
+	});
+
+	it('GET /feeds/feed-1 contains the crawl toggle form with action /api/feeds/feed-1/toggle-crawl', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('action="/api/feeds/feed-1/toggle-crawl"');
+	});
+
+	it('GET /feeds/feed-1 contains a hidden returnTo input with value /feeds/feed-1', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('name="returnTo"');
+		expect(body).toContain('value="/feeds/feed-1"');
+	});
+
+	it('GET /feeds/unknown-id returns 404', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/unknown-id');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(404);
+	});
+
+	it('GET /feeds/feed-1 with null description does NOT contain "Description:" label', async () => {
+		await clearFeeds();
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				html_url: 'https://example.com',
+				xml_url: 'https://example.com/feed.xml',
+				description: null,
+				no_crawl: 0,
+			},
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).not.toContain('Description:');
+	});
+
+	it('GET /feeds/feed-1 with null html_url does NOT contain "Visit Website"', async () => {
+		await clearFeeds();
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				html_url: null,
+				xml_url: 'https://example.com/feed.xml',
+				description: 'A test feed',
+				no_crawl: 0,
+			},
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).not.toContain('Visit Website');
+	});
+
+	it('XSS: feed with script title renders escaped on the detail page', async () => {
+		await clearFeeds();
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: '<script>alert(1)</script>',
+				html_url: 'https://example.com',
+				xml_url: 'https://example.com/feed.xml',
+				no_crawl: 0,
+			},
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).not.toContain('<script>alert(1)</script>');
+		expect(body).toContain('&lt;script&gt;');
+	});
+
+	it('GET /feeds/feed-1 shows crawl run status in recent activity list', async () => {
+		await seedCrawlRuns([
+			{ id: 'run-1', started_at: '2024-01-15T10:00:00Z', completed_at: '2024-01-15T10:01:00Z' },
+		]);
+		await seedCrawlRunDetails([
+			{
+				crawl_run_id: 'run-1',
+				feed_id: 'feed-1',
+				status: 'success',
+				articles_added: 3,
+				error_message: null,
+				auto_disabled: 0,
+			},
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('success');
+	});
+
+	it('GET /feeds/feed-1 with no crawl history shows "No crawl activity recorded."', async () => {
+		// No crawl runs or details seeded
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('No crawl activity recorded.');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Feed detail page — list context
+// ---------------------------------------------------------------------------
+describe('Feed detail page — list context', () => {
+	beforeEach(async () => {
+		await clearCrawlRunDetails();
+		await clearCrawlRuns();
+		await clearFeeds();
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				html_url: 'https://example.com',
+				xml_url: 'https://example.com/feed.xml',
+				no_crawl: 0,
+			},
+		]);
+	});
+
+	it('GET /feeds/feed-1?listPage=3&disabled=1 — "Back to Feeds" link contains /feeds?page=3&disabled=1', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1?listPage=3&disabled=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('/feeds?page=3&amp;disabled=1');
+	});
+
+	it('GET /feeds/feed-1?listPage=3&disabled=1 — "View Articles" link contains listPage=3 and disabled=1', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1?listPage=3&disabled=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('listPage=3');
+		expect(body).toContain('disabled=1');
+		// View Articles link should have both params
+		expect(body).toMatch(/href="\/feeds\/feed-1\/articles\?[^"]*listPage=3[^"]*"/);
+	});
+
+	it('GET /feeds/feed-1?listPage=3&disabled=1 — hidden returnTo input contains listPage=3 and disabled=1', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1?listPage=3&disabled=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		// The returnTo value is the self href with context params
+		expect(body).toMatch(/value="\/feeds\/feed-1\?[^"]*listPage=3[^"]*"/);
+		expect(body).toMatch(/value="\/feeds\/feed-1\?[^"]*disabled=1[^"]*"/);
+	});
+
+	it('GET /feeds/feed-1 (no context params) — "Back to Feeds" link is /feeds with no extra params', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/feeds"');
+		expect(body).not.toContain('href="/feeds?');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Feeds list — disabled filter
+// ---------------------------------------------------------------------------
+describe('Feeds list — disabled filter', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+	});
+
+	it('GET /feeds?disabled=1 shows only the disabled feed, not the enabled feed', async () => {
+		await seedFeeds([
+			{ id: 'feed-enabled', hostname: 'enabled.example.com', title: 'Enabled Feed', html_url: 'https://enabled.example.com', no_crawl: 0 },
+			{ id: 'feed-disabled', hostname: 'disabled.example.com', title: 'Disabled Feed', html_url: 'https://disabled.example.com', no_crawl: 1 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds?disabled=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Disabled Feed');
+		expect(body).not.toContain('Enabled Feed');
+	});
+
+	it('GET /feeds (no filter) shows both enabled and disabled feeds', async () => {
+		await seedFeeds([
+			{ id: 'feed-enabled', hostname: 'enabled.example.com', title: 'Enabled Feed', html_url: 'https://enabled.example.com', no_crawl: 0 },
+			{ id: 'feed-disabled', hostname: 'disabled.example.com', title: 'Disabled Feed', html_url: 'https://disabled.example.com', no_crawl: 1 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Enabled Feed');
+		expect(body).toContain('Disabled Feed');
+	});
+
+	it('GET /feeds?disabled=1 with no disabled feeds shows "No disabled feeds"', async () => {
+		await seedFeeds([
+			{ id: 'feed-enabled', hostname: 'enabled.example.com', title: 'Enabled Feed', html_url: 'https://enabled.example.com', no_crawl: 0 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds?disabled=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('No disabled feeds');
+	});
+
+	it('GET /feeds?disabled=1 shows "Clear filter" link', async () => {
+		await seedFeeds([
+			{ id: 'feed-disabled', hostname: 'disabled.example.com', title: 'Disabled Feed', html_url: 'https://disabled.example.com', no_crawl: 1 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds?disabled=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Clear filter');
+	});
+
+	it('GET /feeds shows "Show disabled only" link', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'example.com', title: 'Example Feed', html_url: 'https://example.com', no_crawl: 0 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Show disabled only');
+	});
+
+	it('Feed title on /feeds links to /feeds/:feedId (detail page), not an external URL', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'example.com', title: 'Example Feed', html_url: 'https://example.com', no_crawl: 0 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/feeds/feed-1"');
+		// The feed title link should be to the detail page
+		expect(body).toContain('href="/feeds/feed-1">Example Feed');
+	});
+
+	it('/feeds no longer contains href="/feeds/feed-1/articles" link directly', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'example.com', title: 'Example Feed', html_url: 'https://example.com', no_crawl: 0 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).not.toContain('href="/feeds/feed-1/articles"');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Toggle crawl — returnTo redirect
+// ---------------------------------------------------------------------------
+describe('Toggle crawl — returnTo redirect', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'example.com', title: 'Example Feed', html_url: 'https://example.com', no_crawl: 0 },
+		]);
+	});
+
+	async function makeToggleRequest(returnTo) {
+		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+		const bodyParams = returnTo !== undefined
+			? new URLSearchParams({ returnTo }).toString()
+			: '';
+		return SELF.fetch('http://example.com/api/feeds/feed-1/toggle-crawl', {
+			method: 'POST',
+			redirect: 'manual',
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				Cookie: `feed_reader_session=${sessionId}`,
+			},
+			body: bodyParams,
+		});
+	}
+
+	it('POST with no returnTo field redirects to /feeds', async () => {
+		const response = await makeToggleRequest(undefined);
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds');
+	});
+
+	it('POST with returnTo=/feeds/feed-1 redirects to /feeds/feed-1', async () => {
+		const response = await makeToggleRequest('/feeds/feed-1');
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds/feed-1');
+	});
+
+	it('POST with returnTo=/feeds?disabled=1 redirects to /feeds?disabled=1', async () => {
+		const response = await makeToggleRequest('/feeds?disabled=1');
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds?disabled=1');
+	});
+
+	it('POST with returnTo=https://evil.com (external) falls back to /feeds', async () => {
+		const response = await makeToggleRequest('https://evil.com');
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds');
+	});
+
+	it("POST with returnTo=/other/path (doesn't start with /feeds) falls back to /feeds", async () => {
+		const response = await makeToggleRequest('/other/path');
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Articles page — list context
+// ---------------------------------------------------------------------------
+describe('Articles page — list context', () => {
+	beforeEach(async () => {
+		await clearArticles();
+		await clearFeeds();
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'example.com', title: 'Test Feed', html_url: 'https://example.com' },
+		]);
+	});
+
+	it('GET /feeds/feed-1/articles?listPage=2&disabled=1 — "Back to Feeds" link contains /feeds?page=2&disabled=1', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1/articles?listPage=2&disabled=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		// The href may use & or &amp; depending on how it's rendered
+		expect(body).toMatch(/\/feeds\?page=2(&amp;|&)disabled=1/);
+	});
+
+	it('GET /feeds/feed-1/articles (no context params) — "Back to Feeds" link is just /feeds', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1/articles');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/feeds"');
+		expect(body).not.toContain('href="/feeds?');
 	});
 });
