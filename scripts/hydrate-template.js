@@ -48,7 +48,7 @@ if (typeof context !== 'object' || context === null || Array.isArray(context)) {
     process.exit(1);
 }
 
-const result = template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+const result = template.replace(/\{\{\s*(\w+)\s*\}\}/g, (match, key) => {
     if (Object.prototype.hasOwnProperty.call(context, key)) {
         return context[key];
     }

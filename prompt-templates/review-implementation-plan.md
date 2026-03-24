@@ -2,7 +2,7 @@ I have an implementation plan for a new feature or capability for this web app. 
 
 The current implementation plan can be found at:
 
-./plans/feed-crawling-epic.md
+./plans/{{ plan_filename }}
 
 To gather context, you'll need to explore this codebase. Be sure to review previously completed implementation plans in the ./plans/ directory.
 

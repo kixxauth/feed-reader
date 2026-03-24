@@ -40,6 +40,11 @@ Or use vitest directly:
 npx vitest run
 ```
 
+## Testing
+This application uses the Vitest test framework. You can find the API for writing tests at: https://vitest.dev/api/test.html
+
+This application is built on Cloudflare Workers which has a specialized integration with Vitest you can learn more about here: https://developers.cloudflare.com/workers/testing/vitest-integration/
+
 ## Database
 
 This app uses a Cloudflare D1 SQLite database (binding name `DB`) to store feed metadata.
@@ -76,8 +81,13 @@ npx wrangler dev --test-scheduled
 curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
 ```
 
-## Testing
-This application uses the Vitest test framework. You can find the API for writing tests at: https://vitest.dev/api/test.html
+## Template Hydration
 
-This application is built on Cloudflare Workers which has a specialized integration with Vitest you can learn more about here: https://developers.cloudflare.com/workers/testing/vitest-integration/
+The `scripts/hydrate-template.js` utility substitutes `{{variable}}` placeholders in template files with values from a YAML context file. This is useful for generating configuration files or documents from templates.
+
+**Usage:**
+
+```bash
+node scripts/hydrate-template.js <template-file> <context-yaml-file>
+```
 
