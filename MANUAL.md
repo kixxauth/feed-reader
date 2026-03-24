@@ -573,6 +573,23 @@ node scripts/recover-failed-feeds.js --env remote
 
 Feeds with no `html_url`, unreachable websites, or websites with no discoverable feed are skipped and logged. The script prints a per-feed summary and a final count of recovered, skipped, and errored feeds.
 
+### Sync Feeds to Remote
+
+`scripts/sync-feeds-to-remote.js` syncs the local D1 `feeds` table to the remote D1 `feeds` table. Useful when local feed data has been modified or bulk-imported and needs to be pushed to production.
+
+The script bulk-fetches all existing remote IDs in a single query, partitions local records into inserts and updates, then executes each batch via a SQL file (multiple statements per wrangler call).
+
+```bash
+# Dry run — no remote changes
+node scripts/sync-feeds-to-remote.js --dry-run
+
+# Live sync (default batch size: 100)
+node scripts/sync-feeds-to-remote.js
+
+# Custom batch size
+node scripts/sync-feeds-to-remote.js --batch-size=200
+```
+
 ---
 
 ## 10. Testing
@@ -727,7 +744,8 @@ feed-reader/
 ├── scripts/
 │   ├── import-feeds.js           # CLI: bulk import feeds from SQLite
 │   ├── import-articles.js        # CLI: bulk import articles from SQLite
-│   └── recover-failed-feeds.js   # CLI: re-discover and repair feeds that failed the last crawl
+│   ├── recover-failed-feeds.js   # CLI: re-discover and repair feeds that failed the last crawl
+│   └── sync-feeds-to-remote.js   # CLI: sync local feeds table to remote D1
 ├── test/
 │   └── index.spec.js         # All test cases
 ├── plans/                    # Implementation plans (historical reference)

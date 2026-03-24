@@ -98,6 +98,21 @@ npx wrangler dev --test-scheduled
 curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
 ```
 
+## Sync Feeds to Remote
+
+`scripts/sync-feeds-to-remote.js` syncs the local D1 `feeds` table to the remote D1 `feeds` table. It bulk-fetches all existing remote IDs in one query, then inserts new records and updates existing ones in batches.
+
+```bash
+# Dry run — no remote changes
+node scripts/sync-feeds-to-remote.js --dry-run
+
+# Live sync (default batch size: 100)
+node scripts/sync-feeds-to-remote.js
+
+# Custom batch size
+node scripts/sync-feeds-to-remote.js --batch-size=200
+```
+
 ## Recover Failed Feeds
 
 `scripts/recover-failed-feeds.js` examines feeds that failed in the most recent crawl run and attempts to find a new working feed URL by scraping each feed's website. If a new URL is found and parses successfully, the script updates `xml_url` in the database, inserts new articles, and re-enables the feed if it was auto-disabled.
