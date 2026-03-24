@@ -159,11 +159,11 @@ async function discoverWebsiteFeedCandidates(siteUrl, htmlText) {
 	const discoveredUrls = new Map();
 
 	for (const candidateUrl of extractLinkedFeedUrls(siteUrl, htmlText)) {
-		discoveredUrls.set(normalizeUrlForComparison(candidateUrl), candidateUrl);
+		addDiscoveredUrl(discoveredUrls, candidateUrl);
 	}
 
 	for (const candidateUrl of buildCommonFeedUrls(siteUrl)) {
-		discoveredUrls.set(normalizeUrlForComparison(candidateUrl), candidateUrl);
+		addDiscoveredUrl(discoveredUrls, candidateUrl);
 	}
 
 	/** @type {FeedCandidate[]} */
@@ -207,10 +207,26 @@ async function fetchCandidatePreview(candidateUrl, pageTitle) {
 	} catch (err) {
 		const message = String(err?.message || err);
 		if (!message.startsWith('HTTP ')) {
-			console.error('Skipping discovered candidate after preview failure:', candidateUrl, err);
+			console.warn('Skipping discovered candidate after preview failure:', candidateUrl, err);
 		}
 		return null;
 	}
+}
+
+/**
+ * Only keep fetchable HTTP(S) candidates in the de-duplicated discovery map.
+ *
+ * @param {Map<string, string>} discoveredUrls
+ * @param {string|null|undefined} candidateUrl
+ * @returns {void}
+ */
+function addDiscoveredUrl(discoveredUrls, candidateUrl) {
+	const normalizedUrl = normalizeUrlForComparison(candidateUrl);
+	if (!normalizedUrl || !candidateUrl) {
+		return;
+	}
+
+	discoveredUrls.set(normalizedUrl, candidateUrl);
 }
 
 /**
@@ -336,7 +352,7 @@ function resolveUrl(baseUrl, href) {
 	}
 
 	try {
-		return new URL(href, baseUrl).toString();
+		return canonicalizeHttpUrl(new URL(href, baseUrl).toString());
 	} catch {
 		return null;
 	}

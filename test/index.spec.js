@@ -1299,6 +1299,33 @@ describe('Feed discovery', () => {
 		});
 	});
 
+	it('discoverFeedTargets ignores non-http candidate URLs exposed in link tags', async () => {
+		const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+			if (String(url) === 'https://example.com/') {
+				return new Response(
+					makeWebsiteHtml([
+						{
+							href: 'android-app://com.medium.reader/https/medium.com/@steve-yegge',
+							type: 'application/rss+xml',
+						},
+					]),
+					{ headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+				);
+			}
+
+			return new Response('Not Found', { status: 404 });
+		});
+
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const result = await discoverFeedTargets('https://example.com');
+		expect(result).toEqual({
+			kind: 'none',
+			submittedUrl: 'https://example.com/',
+		});
+		expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('android-app://'))).toBe(false);
+		expect(warnSpy).not.toHaveBeenCalled();
+	});
+
 	it('previewDirectFeedUrl maps timeouts to the canonical message', async () => {
 		vi.spyOn(globalThis, 'fetch').mockImplementation(
 			() =>
