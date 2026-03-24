@@ -48,6 +48,7 @@ app.get('/', (c) => {
 			title: 'Feed Reader',
 			content,
 			isAuthenticated: true,
+			currentPath: c.req.path,
 		})
 	);
 });

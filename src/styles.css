@@ -433,3 +433,74 @@ code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.95em;
 }
+
+/* -----------------------------------------------------------------------
+   App header and global navigation
+   ----------------------------------------------------------------------- */
+
+/* Outer header bar — horizontal flex, wraps on narrow viewports */
+header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1.5rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid currentColor;
+    margin-bottom: 1.5rem;
+    opacity: 0.95;
+}
+
+/* Primary nav: three destination links in a row */
+header nav[aria-label="Primary"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    align-items: center;
+}
+
+/* Account nav (Logout): push it to the far right when space allows,
+   using margin-left: auto so it separates from the primary links */
+header nav[aria-label="Account"] {
+    margin-left: auto;
+}
+
+/* Shared link treatment inside the header */
+header nav a {
+    color: var(--color-on-background);
+    text-decoration: none;
+    padding: 0.2rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+    opacity: 0.8;
+}
+
+header nav a:hover,
+header nav a:focus-visible {
+    opacity: 1;
+    text-decoration: underline;
+    outline-offset: 2px;
+}
+
+/* Active primary nav link — distinct from inactive by underline + font-weight,
+   not color alone, so it passes WCAG non-color contrast guidance */
+header nav a.nav-link-active {
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    opacity: 1;
+}
+
+/* Logout link — slightly muted to keep visual weight lower than primary nav */
+header nav[aria-label="Account"] a {
+    font-size: 0.85em;
+    opacity: 0.65;
+    border: 1px solid currentColor;
+    padding: 0.15rem 0.6rem;
+    border-radius: 3px;
+}
+
+header nav[aria-label="Account"] a:hover,
+header nav[aria-label="Account"] a:focus-visible {
+    opacity: 0.9;
+    text-decoration: none;
+}

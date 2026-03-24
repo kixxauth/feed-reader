@@ -24,6 +24,7 @@ export async function handleFeedDetail(c) {
 				title: 'Not Found — Feed Reader',
 				content: '<main><h1>Not Found</h1><p>Feed not found.</p></main>',
 				isAuthenticated: true,
+				currentPath: c.req.path,
 			}),
 			404
 		);
@@ -153,6 +154,7 @@ export async function handleFeedDetail(c) {
 			title: `${escapeHtml(feed.title)} — Feed Reader`,
 			content,
 			isAuthenticated: true,
+			currentPath: c.req.path,
 		})
 	);
 }

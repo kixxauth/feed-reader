@@ -139,6 +139,7 @@ ${items}
 			title: 'Feeds — Feed Reader',
 			content,
 			isAuthenticated: true,
+			currentPath: c.req.path,
 		})
 	);
 }

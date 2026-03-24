@@ -29,6 +29,7 @@ export async function handleToggleFeedCrawl(c) {
 				title: 'Not Found — Feed Reader',
 				content: '<main><h1>Not Found</h1><p>Feed not found.</p></main>',
 				isAuthenticated: true,
+				currentPath: c.req.path,
 			}),
 			404
 		);

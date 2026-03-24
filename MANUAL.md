@@ -250,6 +250,25 @@ To **revoke access**, run the same command and omit the email from the list. Not
 
 ## 4. Pages and Features
 
+### Global Navigation Header
+
+All authenticated pages render a shared header via `renderLayout` in `src/layout.js`. The header contains:
+
+- **Primary nav**: Home (`/`), Feeds List (`/feeds`), Crawl History (`/crawl-history`)
+- **Account nav**: Logout (`/logout`), visually separated from primary links via `margin-left: auto`
+
+The active link is determined by an internal `getActiveSection(currentPath)` helper:
+- Exact match on `/` → Home is active
+- Prefix match on `/feeds` or `/api/feeds` → Feeds List is active
+- Prefix match on `/crawl-history` → Crawl History is active
+- No match or `currentPath` omitted → no active state
+
+The active link receives `aria-current="page"` and a `nav-link-active` CSS class (which applies bold font-weight and underline — providing contrast beyond color alone for WCAG compliance).
+
+Route handlers pass `currentPath: c.req.path` to `renderLayout`. When `isAuthenticated` is false or `currentPath` is omitted, the header is not rendered (e.g., public pages like `/login`, `/logged-out`).
+
+---
+
 ### Home (`/`)
 
 Protected. Simple landing page with navigation to `/feeds`.
@@ -739,7 +758,7 @@ npx wrangler d1 execute feed-reader-db --remote --command "UPDATE feeds SET no_c
 feed-reader/
 ├── src/
 │   ├── index.js              # App entry: route registration, middleware wiring, scheduled handler
-│   ├── layout.js             # Shared HTML layout (renderLayout)
+│   ├── layout.js             # Shared HTML layout (renderLayout), global navigation header with active-section logic
 │   ├── db.js                 # Database query helpers
 │   ├── crawl.js              # Feed crawl logic (performCrawl, XML parsing, article upsert)
 │   ├── feed-discovery.js     # Add-feed URL validation, website scraping, and feed preview loading

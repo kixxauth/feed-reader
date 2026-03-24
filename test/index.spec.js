@@ -2337,3 +2337,320 @@ describe('Add feed flow', () => {
 		expect(feedsPageBody).toContain('The feed returned invalid content');
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Global navigation — labels, hrefs, active state, and logout per section
+// ---------------------------------------------------------------------------
+describe('Global navigation', () => {
+	// Shared nav label / href assertions used in every sub-test
+	function assertNavPresent(body) {
+		// Three primary nav labels
+		expect(body).toContain('Home');
+		expect(body).toContain('Feeds List');
+		expect(body).toContain('Crawl History');
+		// Correct href targets
+		expect(body).toContain('href="/"');
+		expect(body).toContain('href="/feeds"');
+		expect(body).toContain('href="/crawl-history"');
+		// Logout control
+		expect(body).toContain('href="/logout"');
+		expect(body).toContain('Logout');
+	}
+
+	// Helper: assert exactly one aria-current="page" in the nav, on the expected link
+	function assertActiveLink(body, expectedHref) {
+		// The active link should carry aria-current="page"
+		expect(body).toContain('aria-current="page"');
+		// The active link must be the one matching the expected href
+		const activePattern = new RegExp(`href="${expectedHref}"[^>]*aria-current="page"|aria-current="page"[^>]*href="${expectedHref}"`);
+		expect(body).toMatch(activePattern);
+	}
+
+	// Helper: assert no aria-current="page" in the nav
+	function assertNoActiveLink(body) {
+		expect(body).not.toContain('aria-current="page"');
+	}
+
+	describe('Home page (GET /)', () => {
+		beforeEach(async () => {
+			await clearFeeds();
+		});
+
+		it('renders all three nav labels with correct hrefs and Logout', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			assertNavPresent(body);
+		});
+
+		it('marks Home as the active nav link', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			assertActiveLink(body, '/');
+		});
+
+		it('preserves the /feeds link in the page content', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			// The in-page link to feeds should still be present alongside the nav
+			expect(body).toContain('href="/feeds"');
+		});
+	});
+
+	describe('Feeds list page (GET /feeds)', () => {
+		beforeEach(async () => {
+			await clearFeeds();
+		});
+
+		it('renders all three nav labels with correct hrefs and Logout', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			assertNavPresent(body);
+		});
+
+		it('marks Feeds List as the active nav link', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			assertActiveLink(body, '/feeds');
+		});
+
+		it('still shows the Add Feed button (page-specific action preserved)', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			expect(body).toContain('Add Feed');
+			expect(body).toContain('href="/feeds/add"');
+		});
+	});
+
+	describe('Add feed page (GET /feeds/add)', () => {
+		beforeEach(async () => {
+			await clearFeeds();
+		});
+
+		it('renders all three nav labels with correct hrefs and Logout', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/add');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			assertNavPresent(body);
+		});
+
+		it('marks Feeds List as the active nav link (path prefix /feeds)', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/add');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			assertActiveLink(body, '/feeds');
+		});
+
+		it('still shows the Add Feed heading and URL form (page-specific content preserved)', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/add');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			expect(body).toContain('<h1>Add Feed</h1>');
+			expect(body).toContain('name="url"');
+		});
+	});
+
+	describe('Feed detail page (GET /feeds/:feedId)', () => {
+		beforeEach(async () => {
+			await clearCrawlRunDetails();
+			await clearCrawlRuns();
+			await clearFeeds();
+			await seedFeeds([
+				{ id: 'nav-feed-1', hostname: 'example.com', title: 'Nav Test Feed', html_url: 'https://example.com' },
+			]);
+		});
+
+		it('renders all three nav labels with correct hrefs and Logout', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/nav-feed-1');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			assertNavPresent(body);
+		});
+
+		it('marks Feeds List as the active nav link', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/nav-feed-1');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			assertActiveLink(body, '/feeds');
+		});
+
+		it('still shows "Back to Feeds" link (page-specific action preserved)', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/nav-feed-1');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			expect(body).toContain('Back to Feeds');
+		});
+	});
+
+	describe('Articles page (GET /feeds/:feedId/articles)', () => {
+		beforeEach(async () => {
+			await clearArticles();
+			await clearFeeds();
+			await seedFeeds([
+				{ id: 'nav-feed-1', hostname: 'example.com', title: 'Nav Test Feed', html_url: 'https://example.com' },
+			]);
+			await seedArticles([
+				{ id: 'nav-a1', feed_id: 'nav-feed-1', title: 'Nav Article One', published: '2026-01-01' },
+				{ id: 'nav-a2', feed_id: 'nav-feed-1', title: 'Nav Article Two', published: '2026-02-01' },
+			]);
+		});
+
+		it('renders all three nav labels with correct hrefs and Logout', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/nav-feed-1/articles');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			assertNavPresent(body);
+		});
+
+		it('marks Feeds List as the active nav link', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/nav-feed-1/articles');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			assertActiveLink(body, '/feeds');
+		});
+
+		it('still shows the date filter form when articles exist (page-specific element preserved)', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/feeds/nav-feed-1/articles');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			// The filter form is rendered when articles are present
+			expect(body).toContain('filter-form');
+		});
+	});
+
+	describe('Crawl history page (GET /crawl-history)', () => {
+		beforeEach(async () => {
+			await clearCrawlRuns();
+			await clearCrawlRunDetails();
+			await clearFeeds();
+			await seedCrawlRuns([
+				{ id: 'nav-run-1', started_at: '2026-03-20T02:00:00.000Z', total_feeds_attempted: 3 },
+			]);
+		});
+
+		it('renders all three nav labels with correct hrefs and Logout', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/crawl-history');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			assertNavPresent(body);
+		});
+
+		it('marks Crawl History as the active nav link', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/crawl-history');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			assertActiveLink(body, '/crawl-history');
+		});
+
+		it('still shows "Back to Feeds" link on the list page (page-specific action preserved)', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/crawl-history');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			expect(body).toContain('Back to Feeds');
+		});
+	});
+
+	describe('Crawl history detail page (GET /crawl-history/:runId)', () => {
+		beforeEach(async () => {
+			await clearCrawlRunDetails();
+			await clearCrawlRuns();
+			await clearFeeds();
+			await seedFeeds([
+				{ id: 'nav-feed-1', hostname: 'example.com', title: 'Nav Test Feed', html_url: 'https://example.com' },
+			]);
+			await seedCrawlRuns([
+				{ id: 'nav-run-1', started_at: '2026-03-20T02:00:00.000Z', total_feeds_attempted: 1, total_feeds_failed: 0, total_articles_added: 2 },
+			]);
+			await seedCrawlRunDetails([
+				{ crawl_run_id: 'nav-run-1', feed_id: 'nav-feed-1', status: 'success', articles_added: 2 },
+			]);
+		});
+
+		it('renders all three nav labels with correct hrefs and Logout', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/crawl-history/nav-run-1');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			assertNavPresent(body);
+		});
+
+		it('marks Crawl History as the active nav link', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/crawl-history/nav-run-1');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			assertActiveLink(body, '/crawl-history');
+		});
+
+		it('still shows "Back to Crawl History" link (page-specific action preserved)', async () => {
+			const request = await makeAuthenticatedRequest('http://example.com/crawl-history/nav-run-1');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			const body = await response.text();
+			expect(body).toContain('Back to Crawl History');
+		});
+	});
+
+	describe('Unauthenticated pages do not render the nav header', () => {
+		it('GET /login does not contain the primary nav links', async () => {
+			const response = await SELF.fetch('http://example.com/login');
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			// The three primary nav destinations should not appear on the login page
+			expect(body).not.toContain('Feeds List');
+			expect(body).not.toContain('Crawl History');
+			assertNoActiveLink(body);
+		});
+	});
+});

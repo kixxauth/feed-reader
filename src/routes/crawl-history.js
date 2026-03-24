@@ -76,6 +76,7 @@ ${items}
 			title: 'Crawl History — Feed Reader',
 			content,
 			isAuthenticated: true,
+			currentPath: c.req.path,
 		})
 	);
 }
@@ -93,6 +94,7 @@ export async function handleCrawlHistoryDetail(c) {
 				title: 'Not Found — Feed Reader',
 				content: '<main><h1>Not Found</h1><p>Crawl run not found.</p></main>',
 				isAuthenticated: true,
+				currentPath: c.req.path,
 			}),
 			404
 		);
@@ -187,6 +189,7 @@ ${rows}
 			title: 'Crawl Run Details — Feed Reader',
 			content,
 			isAuthenticated: true,
+			currentPath: c.req.path,
 		})
 	);
 }

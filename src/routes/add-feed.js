@@ -83,6 +83,7 @@ export function renderAddFeedPage(c, state, status = 200) {
 			title: 'Add Feed — Feed Reader',
 			content,
 			isAuthenticated: true,
+			currentPath: c.req.path,
 		}),
 		status
 	);
