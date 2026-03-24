@@ -1000,8 +1000,10 @@ describe('Crawl history page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		// Feed title should be shown for known feed
+		// Feed title links to the detail page (not external)
+		expect(body).toContain('href="/feeds/feed-1"');
 		expect(body).toContain('Alpha Feed');
+		expect(body).not.toContain('href="https://alpha.example.com"');
 		// Articles added count should appear
 		expect(body).toContain('5');
 		// Status indicators should appear
@@ -1009,7 +1011,7 @@ describe('Crawl history page', () => {
 		expect(body).toContain('failed');
 		// Error message for failed feed
 		expect(body).toContain('HTTP 404');
-		// Fallback to feed_id for deleted feed
+		// Fallback to feed_id for deleted feed (no link — detail page would 404)
 		expect(body).toContain('feed-missing');
 	});
 
@@ -1042,6 +1044,71 @@ describe('Crawl history page', () => {
 		const body = await response.text();
 		expect(body).not.toContain('<script>alert("xss")</script>');
 		expect(body).toContain('&lt;script&gt;');
+	});
+
+	it('GET /crawl-history/:id shows "Show failed only" link when unfiltered', async () => {
+		await seedCrawlRuns([{ id: 'run-filter-test', started_at: '2026-03-23T02:00:00.000Z' }]);
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history/run-filter-test');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Show failed only');
+		expect(body).toContain('href="/crawl-history/run-filter-test?failed=1"');
+	});
+
+	it('GET /crawl-history/:id?failed=1 shows only failed and auto-disabled rows', async () => {
+		await seedFeeds([
+			{ id: 'feed-ok', hostname: 'ok.example.com', title: 'OK Feed', html_url: 'https://ok.example.com' },
+			{ id: 'feed-bad', hostname: 'bad.example.com', title: 'Bad Feed', html_url: 'https://bad.example.com' },
+			{ id: 'feed-gone', hostname: 'gone.example.com', title: 'Gone Feed', html_url: 'https://gone.example.com' },
+		]);
+		await seedCrawlRuns([{ id: 'run-filter-test', started_at: '2026-03-23T02:00:00.000Z' }]);
+		await seedCrawlRunDetails([
+			{ crawl_run_id: 'run-filter-test', feed_id: 'feed-ok', status: 'success', articles_added: 3 },
+			{ crawl_run_id: 'run-filter-test', feed_id: 'feed-bad', status: 'failed', articles_added: 0, error_message: 'timeout' },
+			{ crawl_run_id: 'run-filter-test', feed_id: 'feed-gone', status: 'auto_disabled', articles_added: 0 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history/run-filter-test?failed=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Bad Feed');
+		expect(body).toContain('Gone Feed');
+		expect(body).not.toContain('OK Feed');
+	});
+
+	it('GET /crawl-history/:id?failed=1 shows "Show all" link', async () => {
+		await seedCrawlRuns([{ id: 'run-filter-test', started_at: '2026-03-23T02:00:00.000Z' }]);
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history/run-filter-test?failed=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('Show all');
+		expect(body).toContain('href="/crawl-history/run-filter-test"');
+	});
+
+	it('GET /crawl-history/:id?failed=1 with no failures shows empty message with show-all link', async () => {
+		await seedFeeds([
+			{ id: 'feed-ok', hostname: 'ok.example.com', title: 'OK Feed', html_url: 'https://ok.example.com' },
+		]);
+		await seedCrawlRuns([{ id: 'run-filter-test', started_at: '2026-03-23T02:00:00.000Z' }]);
+		await seedCrawlRunDetails([
+			{ crawl_run_id: 'run-filter-test', feed_id: 'feed-ok', status: 'success', articles_added: 5 },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/crawl-history/run-filter-test?failed=1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('No failed feed attempts');
+		expect(body).toContain('Show all');
 	});
 
 	it('GET /crawl-history/:badId returns 404', async () => {

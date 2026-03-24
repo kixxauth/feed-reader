@@ -98,7 +98,12 @@ export async function handleCrawlHistoryDetail(c) {
 		);
 	}
 
-	const details = await getCrawlRunDetails(c.env.DB, crawlRunId);
+	const failedOnly = c.req.query('failed') === '1';
+
+	const allDetails = await getCrawlRunDetails(c.env.DB, crawlRunId);
+	const details = failedOnly
+		? allDetails.filter((d) => d.status === 'failed' || d.status === 'auto_disabled')
+		: allDetails;
 
 	const startedAt = formatDateTime(run.started_at);
 
@@ -111,9 +116,16 @@ export async function handleCrawlHistoryDetail(c) {
     </div>
   </div>`;
 
+	const filterControl = failedOnly
+		? `<p class="feed-filter">Showing failed only — <a href="/crawl-history/${escapeHtml(crawlRunId)}">Show all</a></p>`
+		: `<p class="feed-filter"><a href="/crawl-history/${escapeHtml(crawlRunId)}?failed=1">Show failed only</a></p>`;
+
 	let detailRows;
 	if (details.length === 0) {
-		detailRows = '<p>No feed detail records for this crawl run.</p>';
+		const emptyMessage = failedOnly
+			? `<p>No failed feed attempts in this crawl run. <a href="/crawl-history/${escapeHtml(crawlRunId)}">Show all</a></p>`
+			: '<p>No feed detail records for this crawl run.</p>';
+		detailRows = emptyMessage;
 	} else {
 		const rows = details
 			.map((detail) => {
@@ -121,8 +133,8 @@ export async function handleCrawlHistoryDetail(c) {
 				const feedText = detail.feed_title
 					? escapeHtml(detail.feed_title)
 					: escapeHtml(detail.feed_id);
-				const feedLabel = detail.feed_html_url
-					? `<a href="${escapeHtml(detail.feed_html_url)}" target="_blank" rel="noopener noreferrer">${feedText}</a>`
+				const feedLabel = detail.feed_title
+					? `<a href="/feeds/${escapeHtml(detail.feed_id)}">${feedText}</a>`
 					: feedText;
 
 				// Determine status badge CSS class and display text
@@ -166,6 +178,7 @@ ${rows}
   <h1>Crawl Run Details</h1>
   <a href="/crawl-history">Back to Crawl History</a>
   ${summary}
+  ${filterControl}
   ${detailRows}
 </main>`;
 
