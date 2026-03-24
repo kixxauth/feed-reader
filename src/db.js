@@ -214,7 +214,7 @@ export async function getCrawlRunById(db, crawlRunId) {
  */
 export async function getCrawlRunDetails(db, crawlRunId) {
 	const sql = `
-		SELECT d.*, f.title AS feed_title, f.hostname AS feed_hostname
+		SELECT d.*, f.title AS feed_title, f.hostname AS feed_hostname, f.html_url AS feed_html_url, f.xml_url AS feed_xml_url
 		FROM crawl_run_details d
 		LEFT JOIN feeds f ON d.feed_id = f.id
 		WHERE d.crawl_run_id = ?

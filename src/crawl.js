@@ -211,6 +211,10 @@ function parseFeedXml(xmlText, feedId) {
 		ignoreAttributes: false,
 		attributeNamePrefix: '', // attributes accessed without @_ prefix
 		isArray: (name) => name === 'item' || name === 'entry', // always arrays
+		processEntities: {
+			maxTotalExpansions: 10000,
+			maxExpandedLength: 1000000,
+		},
 	});
 
 	let parsed;

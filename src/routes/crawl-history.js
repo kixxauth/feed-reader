@@ -118,9 +118,12 @@ export async function handleCrawlHistoryDetail(c) {
 		const rows = details
 			.map((detail) => {
 				// Use feed title from JOIN if available; fall back to feed_id
-				const feedLabel = detail.feed_title
+				const feedText = detail.feed_title
 					? escapeHtml(detail.feed_title)
 					: escapeHtml(detail.feed_id);
+				const feedLabel = detail.feed_html_url
+					? `<a href="${escapeHtml(detail.feed_html_url)}" target="_blank" rel="noopener noreferrer">${feedText}</a>`
+					: feedText;
 
 				// Determine status badge CSS class and display text
 				let statusClass;
@@ -136,13 +139,17 @@ export async function handleCrawlHistoryDetail(c) {
 					statusText = 'Success';
 				}
 
+				const xmlLinkHtml = detail.feed_xml_url
+					? ` <a href="${escapeHtml(detail.feed_xml_url)}" target="_blank" rel="noopener noreferrer">(XML)</a>`
+					: '';
+
 				const errorHtml =
 					detail.error_message
 						? `<span class="crawl-detail-error">${escapeHtml(detail.error_message)}</span>`
 						: '';
 
 				return `<li class="crawl-detail-row">
-      <span class="crawl-detail-feed">${feedLabel}</span>
+      <span class="crawl-detail-feed">${feedLabel}${xmlLinkHtml}</span>
       <span class="crawl-detail-articles"><strong>Articles added:</strong> ${detail.articles_added}</span>
       <span class="crawl-detail-status ${statusClass}">${statusText}</span>
       ${errorHtml}
