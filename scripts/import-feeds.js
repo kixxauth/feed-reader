@@ -19,6 +19,7 @@ import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { canonicalizeHttpUrl, normalizeUrlForComparison } from '../src/feed-utils.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
@@ -116,6 +117,24 @@ if (feedRows.length === 0) {
 	process.exit(0);
 }
 
+const seenXmlUrls = new Map();
+for (const row of feedRows) {
+	const normalizedXmlUrl = normalizeUrlForComparison(row.xml_url);
+	if (!normalizedXmlUrl) {
+		continue;
+	}
+
+	const existingId = seenXmlUrls.get(normalizedXmlUrl);
+	if (existingId) {
+		console.error(
+			`Error: duplicate xml_url detected in source data for feed ids ${existingId} and ${row.id}: ${row.xml_url}`
+		);
+		process.exit(1);
+	}
+
+	seenXmlUrls.set(normalizedXmlUrl, row.id);
+}
+
 // ---------------------------------------------------------------------------
 // Escape single-quoted string values for safe SQL embedding
 // ---------------------------------------------------------------------------
@@ -133,7 +152,6 @@ function escapeSqlString(value) {
 const locationFlag = envFlag === 'local' ? '--local' : '--remote';
 
 let insertedCount = 0;
-let updatedCount = 0;
 let errorCount = 0;
 
 for (const row of feedRows) {
@@ -141,8 +159,8 @@ for (const row of feedRows) {
 	const hostname = escapeSqlString(row.hostname);
 	const type = escapeSqlString(row.type);
 	const title = escapeSqlString(row.title);
-	const xmlUrl = escapeSqlString(row.xml_url);
-	const htmlUrl = escapeSqlString(row.html_url);
+	const xmlUrl = escapeSqlString(canonicalizeHttpUrl(row.xml_url) ?? row.xml_url);
+	const htmlUrl = escapeSqlString(canonicalizeHttpUrl(row.html_url) ?? row.html_url);
 	const noCrawl = row.no_crawl !== null && row.no_crawl !== undefined ? Number(row.no_crawl) : 0;
 	const description = escapeSqlString(row.description);
 	const lastBuildDate = escapeSqlString(row.last_build_date);
@@ -170,7 +188,12 @@ for (const row of feedRows) {
 		});
 		insertedCount++;
 	} catch (err) {
-		console.error(`Failed to upsert feed id=${row.id}: ${err.message}`);
+		const message = String(err.message || err);
+		if (message.includes('idx_feeds_xml_url_normalized_unique') || message.includes('UNIQUE constraint failed')) {
+			console.error(`Failed to upsert feed id=${row.id}: duplicate xml_url after normalization (${row.xml_url})`);
+		} else {
+			console.error(`Failed to upsert feed id=${row.id}: ${message}`);
+		}
 		errorCount++;
 	}
 }

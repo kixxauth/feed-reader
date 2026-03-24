@@ -19,7 +19,7 @@
  */
 
 import { renderLayout } from '../layout.js';
-import { getFeedsPaginated, PAGE_SIZE } from '../db.js';
+import { getCrawlRunDetailByFeed, getFeedsPaginated, PAGE_SIZE } from '../db.js';
 import { escapeHtml } from '../html-utils.js';
 
 export async function handleFeeds(c) {
@@ -27,6 +27,8 @@ export async function handleFeeds(c) {
 	let page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
 
 	const disabled = c.req.query('disabled') === '1';
+	const addedFeedId = c.req.query('addedFeedId') || '';
+	const crawlRunId = c.req.query('crawlRunId') || '';
 
 	let { feeds, total } = await getFeedsPaginated(c.env.DB, page, { disabledOnly: disabled });
 	const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -37,6 +39,10 @@ export async function handleFeeds(c) {
 	}
 
 	const disabledParam = disabled ? '?disabled=1' : '';
+	const addFeedButton = `<p class="page-actions"><a class="button-link" href="/feeds/add">Add Feed</a></p>`;
+	const bannerHtml = addedFeedId && crawlRunId
+		? await buildAddFeedBanner(c.env.DB, addedFeedId, crawlRunId)
+		: '';
 
 	let content;
 	if (total === 0) {
@@ -45,6 +51,8 @@ export async function handleFeeds(c) {
 			: `<p>No feeds available</p>`;
 		content = `<main>
   <h1>Feeds</h1>
+  ${bannerHtml}
+  ${addFeedButton}
   ${emptyMessage}
 </main>`;
 	} else {
@@ -112,6 +120,8 @@ export async function handleFeeds(c) {
 
 		content = `<main>
   <h1>Feeds</h1>
+  ${bannerHtml}
+  ${addFeedButton}
   ${filterControl}
   <ul class="feed-list">
 ${items}
@@ -131,4 +141,20 @@ ${items}
 			isAuthenticated: true,
 		})
 	);
+}
+
+async function buildAddFeedBanner(db, feedId, crawlRunId) {
+	const detail = await getCrawlRunDetailByFeed(db, crawlRunId, feedId);
+
+	const successHtml = '<div class="notice notice-success">Feed added successfully.</div>';
+	if (!detail) {
+		return `${successHtml}\n  <div class="notice notice-info">Feed added. Initial crawl in progress.</div>`;
+	}
+
+	if (detail.status === 'failed' || detail.status === 'auto_disabled') {
+		const reason = detail.error_message || 'Unknown error';
+		return `${successHtml}\n  <div class="notice notice-warning">Feed added, but could not fetch articles yet. Reason: ${escapeHtml(reason)}. Articles will be fetched at the next scheduled crawl (2am UTC).</div>`;
+	}
+
+	return `${successHtml}\n  <div class="notice notice-info">Feed added. Initial crawl completed.</div>`;
 }

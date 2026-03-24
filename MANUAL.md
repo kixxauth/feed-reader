@@ -47,7 +47,7 @@ All incoming HTTP requests pass through `authMiddleware` (registered globally). 
 
 **Public paths** (no auth required): `/login`, `/auth/start`, `/auth/callback`, `/logout`, `/logged-out`
 
-**Protected paths** (auth required): `/`, `/feeds`, `/feeds/:feedId/articles`, `/api/feeds/:feedId/toggle-crawl`, `/crawl-history`, `/crawl-history/:crawlRunId`
+**Protected paths** (auth required): `/`, `/feeds`, `/feeds/add`, `/feeds/:feedId`, `/feeds/:feedId/articles`, `/api/feeds/add`, `/api/feeds/:feedId/toggle-crawl`, `/crawl-history`, `/crawl-history/:crawlRunId`
 
 ### Scheduled Job
 
@@ -67,7 +67,7 @@ Styles are defined in `src/styles.css` and imported as a text module (via a Wran
 
 ### `feeds` table
 
-Created by migration `0001_create_feeds_table.sql`. Column `consecutive_failure_count` added by `0003_add_failure_count_to_feeds.sql`.
+Created by migration `0001_create_feeds_table.sql`. Column `consecutive_failure_count` added by `0003_add_failure_count_to_feeds.sql`. A normalized unique index on `LOWER(TRIM(xml_url))` is added by `0006_add_unique_index_on_feed_xml_url.sql` to prevent duplicate feeds regardless of case or surrounding whitespace.
 
 ```sql
 CREATE TABLE feeds (
@@ -247,14 +247,35 @@ Public. Renders a "Login with GitHub" link pointing to `/auth/start?next={encode
 
 ### Feeds List (`/feeds`)
 
-Protected. Displays all imported feeds with pagination.
+Protected. Displays all feeds with pagination, including feeds imported by CLI and feeds added from the UI.
 
 - **Sort**: By `hostname ASC`
 - **Page size**: 50 feeds per page
 - **Pagination**: `?page=N` (1-indexed). Out-of-bounds pages are clamped to the last valid page (200 response, no redirect).
-- **Per feed**: external link to `html_url`, feed hostname (subordinate text), crawl status badge (`Crawling` or `Disabled`), "Articles" link to `/feeds/{feedId}/articles`, and an Enable/Disable toggle button.
+- **Page actions**: includes an `Add Feed` link to `/feeds/add`
+- **Per feed**: external link to `html_url`, feed hostname (subordinate text), crawl status badge (`Crawling` or `Disabled`), detail link to `/feeds/{feedId}`, and an Enable/Disable toggle button.
 - **Crawl toggle**: Submits `POST /api/feeds/{feedId}/toggle-crawl`. Uses POST-redirect-GET (303) so back/refresh does not re-POST.
+- **Add-feed banners**: after confirming a new feed, `/feeds` can show a success banner plus either an "initial crawl in progress", "initial crawl completed", or "initial crawl failed" message based on the matching `crawl_run_details` row.
 - **XSS protection**: All feed data HTML-escaped before rendering
+
+### Add Feed (`/feeds/add`)
+
+Protected. Renders the user-facing add-feed flow.
+
+- **Step 1**: Accepts either a website URL or a direct RSS/Atom URL.
+- **Step 2**: If the URL is a website, the Worker scans `<link>` tags plus a small list of common feed paths (`/feed`, `/rss`, `/atom.xml`, `/feed.xml`, `/feeds/atom`, `/feeds/rss`).
+- **Step 3**: If one feed is found, the page renders a confirmation screen; if multiple feeds are found, the user is shown a selection screen first.
+- **Fallback**: If no feeds are discovered on the site, the page offers a direct feed URL field without leaving `/feeds/add`.
+- **Back navigation**: The flow keeps the selected/discovered state in hidden form fields, so users can go back without temporary server-side state in KV or D1.
+
+### Add Feed Submit (`POST /api/feeds/add`)
+
+Protected. Handles the server-rendered add-feed flow.
+
+- **Validation**: URL validation, website scraping, duplicate checks, and feed preview extraction happen on the server.
+- **Duplicate handling**: Looks up existing feeds by normalized `xml_url` and also relies on the D1 unique index to prevent concurrent duplicate inserts.
+- **Feed creation**: Creates a new `feeds` row with discovered `title`, `description`, `html_url`, `type`, and `last_build_date`.
+- **Immediate crawl**: Schedules `performFeedCrawl()` with `c.executionCtx.waitUntil(...)` so the confirm response redirects immediately while the first crawl runs in the background.
 
 ### Articles List (`/feeds/:feedId/articles`)
 
@@ -300,7 +321,7 @@ The crawl runs automatically once per day at **02:00 UTC** via a Cloudflare cron
 
 ### Crawl Logic (`src/crawl.js`)
 
-`performCrawl(db)` is the main entry point:
+`performCrawl(db)` is the main entry point for scheduled crawls:
 
 1. Fetches all feeds with `no_crawl = 0` from the database.
 2. For each feed, fetches the RSS/Atom XML from `xml_url` (30-second timeout, `FeedReader/1.0` user agent).
@@ -312,6 +333,8 @@ The crawl runs automatically once per day at **02:00 UTC** via a Cloudflare cron
 8. Records a `crawl_run_details` row for every feed processed.
 9. Records a `crawl_runs` summary row after all feeds are processed.
 10. Returns `{ crawlRunId, totalFeeds, totalFailed, totalArticlesAdded }` for logging.
+
+`performFeedCrawl(db, feedId, crawlRunId)` is the single-feed entry point used by the add-feed flow. It reuses the same history recording and failure-count logic as the scheduled crawl but operates on one newly created feed and uses the pre-generated `crawlRunId` included in the `/feeds` redirect.
 
 ### Article ID Derivation
 
@@ -510,6 +533,8 @@ npm run import-feeds -- --env local --table my_table path/to/source.sqlite
 
 **Required source columns**: `id`, `hostname`, `type`, `title`, `xml_url`, `html_url`, `no_crawl`, `description`, `last_build_date`, `score`
 
+**Duplicate prevention**: Before import, the script normalizes `xml_url` the same way as the Worker (`HTTP/HTTPS` canonicalization plus case-insensitive compare) and aborts if the source data contains duplicate feed URLs. Remote/local D1 inserts also rely on the normalized unique index added by migration `0006`.
+
 ### Import Articles
 
 ```bash
@@ -570,6 +595,7 @@ await clearArticles();
 - OAuth callback validates state, checks email, creates session
 - Session refresh throttle (no KV write within TTL/2 window)
 - Feeds page: pagination, empty state, XSS escaping, crawl status badges, toggle links
+- Add-feed flow: URL validation, direct feed confirmation, website discovery, duplicate prevention, fallback direct-feed submission, and add-feed banners on `/feeds`
 - Articles page: pagination, date filtering, empty states, NULL published dates, XSS escaping
 - Crawl history: list page, detail page, 404 for unknown run
 - Toggle crawl: enables/disables feed, resets failure count on enable, 404 for unknown feed
@@ -629,7 +655,7 @@ npx wrangler d1 execute feed-reader-db --remote --command "UPDATE feeds SET no_c
 
 ### Adding a New Database Migration
 
-1. Create a new file in `migrations/` following the naming pattern: `0006_description.sql`
+1. Create a new file in `migrations/` following the naming pattern: `0007_description.sql` (or the next unused number)
 2. Write your `CREATE TABLE`, `ALTER TABLE`, or index SQL
 3. Apply locally: `npx wrangler d1 migrations apply feed-reader-db --local`
 4. Run tests: `npm test`
@@ -646,6 +672,8 @@ feed-reader/
 │   ├── layout.js             # Shared HTML layout (renderLayout)
 │   ├── db.js                 # Database query helpers
 │   ├── crawl.js              # Feed crawl logic (performCrawl, XML parsing, article upsert)
+│   ├── feed-discovery.js     # Add-feed URL validation, website scraping, and feed preview loading
+│   ├── feed-utils.js         # Shared URL normalization and hostname helpers
 │   ├── html-utils.js         # escapeHtml() utility
 │   ├── styles.css            # Stylesheet (imported as text, inlined into HTML)
 │   ├── auth/
@@ -659,17 +687,21 @@ feed-reader/
 │   │   ├── callback.js       # GET /auth/callback
 │   │   ├── logout.js         # GET /logout
 │   │   ├── logged-out.js     # GET /logged-out
+│   │   ├── add-feed.js       # GET /feeds/add and shared rendering helpers for the add-feed flow
 │   │   ├── feeds.js          # GET /feeds
+│   │   ├── feed-detail.js    # GET /feeds/:feedId
 │   │   ├── articles.js       # GET /feeds/:feedId/articles
 │   │   └── crawl-history.js  # GET /crawl-history, GET /crawl-history/:crawlRunId
-│   └── api/
-│       └── toggle-feed-crawl.js  # POST /api/feeds/:feedId/toggle-crawl
+│   │   └── api/
+│   │       ├── add-feed.js           # POST /api/feeds/add
+│   │       └── toggle-feed-crawl.js  # POST /api/feeds/:feedId/toggle-crawl
 ├── migrations/
 │   ├── 0001_create_feeds_table.sql
 │   ├── 0002_create_articles_table.sql
 │   ├── 0003_add_failure_count_to_feeds.sql
 │   ├── 0004_create_crawl_runs_table.sql
-│   └── 0005_create_crawl_run_details_table.sql
+│   ├── 0005_create_crawl_run_details_table.sql
+│   └── 0006_add_unique_index_on_feed_xml_url.sql
 ├── scripts/
 │   ├── import-feeds.js       # CLI: bulk import feeds from SQLite
 │   └── import-articles.js    # CLI: bulk import articles from SQLite
@@ -692,8 +724,12 @@ feed-reader/
 | File | Responsibility |
 |---|---|
 | `src/index.js` | Mounts middleware and all routes; exports the Hono app and `scheduled` handler |
-| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeeds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount` |
-| `src/crawl.js` | `performCrawl` — fetches, parses, and upserts feed articles; tracks failures; records crawl history |
+| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeeds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed` |
+| `src/crawl.js` | `performCrawl`, `performFeedCrawl` — scheduled and immediate crawl entry points sharing the same history/failure logic |
+| `src/feed-discovery.js` | Add-feed URL validation, website scraping, candidate discovery, and user-facing validation messages |
+| `src/feed-utils.js` | URL canonicalization, duplicate-comparison normalization, and hostname derivation |
+| `src/routes/add-feed.js` | Add-feed page renderer and hidden-state helpers for the SSR multi-step flow |
+| `src/routes/api/add-feed.js` | Server-side add-feed workflow, duplicate handling, feed creation, and immediate crawl scheduling |
 | `src/auth/middleware.js` | Auth gate for all requests; session validation and throttled refresh |
 | `src/auth/session.js` | `createSession`, `getSession`, `refreshSession`, `deleteSession`, cookie helpers |
 | `src/auth/github.js` | `getAuthorizationUrl`, `exchangeCodeForToken`, `getUserEmails` |
@@ -708,7 +744,7 @@ feed-reader/
 | Area | Limitation |
 |---|---|
 | Multi-user | All users share the same feeds and articles; no per-user data |
-| Feed management | No UI for adding, editing, or deleting feeds — CLI import only |
+| Feed management | Users can add feeds from the UI, but there is still no UI for editing or deleting feeds |
 | Full-text search | No article content search |
 | Read tracking | No mark-as-read, bookmarks, or history |
 | Cascading deletes | Articles are not removed when a feed is deleted |
@@ -716,3 +752,4 @@ feed-reader/
 | Crawl scheduling | Cron interval is fixed at daily (02:00 UTC); changing it requires editing `wrangler.jsonc` and redeploying |
 | Crawl concurrency | Feeds are crawled sequentially (one at a time), not in parallel |
 | Article content | Only article metadata is stored (title, link, dates); full article body is not fetched or stored |
+| Add-feed state | The multi-step add-feed flow serializes discovered candidates into hidden form fields; very large candidate sets would increase HTML form size |

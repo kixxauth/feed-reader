@@ -4,6 +4,7 @@
  * Exports:
  *   parseFeedXml(xmlText, feedId) — parses RSS 2.0 or Atom 1.0 feed XML and
  *   returns a flat array of article data objects.
+ *   parseFeedPreview(xmlText) — parses feed-level metadata used by the add-feed flow
  *
  * ## Design notes
  *
@@ -47,6 +48,7 @@
  */
 
 import sax from 'sax';
+import { canonicalizeHttpUrl } from './feed-utils.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -203,27 +205,38 @@ function detectFeedFormat(xmlText) {
 
 /**
  * Parse an RSS 2.0 feed XML string using sax event-driven parsing.
- * Tracks only title, link, guid, pubDate within <item> elements.
- * All other fields are ignored without buffering.
  *
  * @param {string} xmlText
  * @param {string} feedId
- * @returns {Array<{ id: string|null, link: string|null, title: string|null, published: string|null, updated: null }>}
+ * @returns {{
+ *   metadata: {
+ *     type: 'rss',
+ *     title: string|null,
+ *     description: string|null,
+ *     htmlUrl: string|null,
+ *     lastBuildDate: string|null
+ *   },
+ *   articles: Array<{ id: string|null, link: string|null, title: string|null, published: string|null, updated: null }>
+ * }}
  * @throws {Error} - If XML is malformed (message starts with "Invalid XML:")
  */
 function parseRssFeed(xmlText, feedId) {
 	const parser = sax.parser(true, { xmlns: false, trim: false });
 
 	const articles = [];
+	const pathStack = [];
 	let inItem = false;
 
-	// Field buffers for the current item
+	let channelTitleBuf = null;
+	let channelDescriptionBuf = null;
+	let channelLinkBuf = null;
+	let channelLastBuildDateBuf = null;
+
 	let guidBuf = null;
 	let linkBuf = null;
 	let titleBuf = null;
 	let pubDateBuf = null;
 
-	// Which field is currently being buffered (or null)
 	let currentField = null;
 	let textBuffer = '';
 
@@ -233,6 +246,7 @@ function parseRssFeed(xmlText, feedId) {
 
 	parser.onopentag = (node) => {
 		const tag = normalizeTagName(node.name);
+		pathStack.push(tag);
 
 		if (tag === 'item') {
 			inItem = true;
@@ -245,21 +259,27 @@ function parseRssFeed(xmlText, feedId) {
 			return;
 		}
 
-		if (!inItem) return;
-
-		// Only track these four fields; ignore everything else
-		if (tag === 'title' || tag === 'link' || tag === 'guid' || tag === 'pubdate') {
-			currentField = tag;
-			textBuffer = '';
+		const parentTag = pathStack[pathStack.length - 2] ?? null;
+		if (inItem && parentTag === 'item') {
+			if (tag === 'title' || tag === 'link' || tag === 'guid' || tag === 'pubdate') {
+				currentField = tag;
+				textBuffer = '';
+			}
+			return;
 		}
-		// All other tags: leave currentField as-is (do not start buffering)
+
+		if (!inItem && parentTag === 'channel') {
+			if (tag === 'title' || tag === 'description' || tag === 'link' || tag === 'lastbuilddate') {
+				currentField = tag;
+				textBuffer = '';
+			}
+		}
 	};
 
 	parser.onclosetag = (name) => {
 		const tag = normalizeTagName(name);
 
 		if (tag === 'item') {
-			// Commit the collected buffers into an article
 			const guid = normalizeString(guidBuf);
 			const link = normalizeString(linkBuf);
 			const title = normalizeString(titleBuf);
@@ -276,46 +296,73 @@ function parseRssFeed(xmlText, feedId) {
 			inItem = false;
 			currentField = null;
 			textBuffer = '';
+			pathStack.pop();
 			return;
 		}
 
-		if (!inItem) return;
-
-		// On closing a tracked field, commit the buffer
 		if (currentField !== null && tag === currentField) {
-			switch (currentField) {
-				case 'title':
-					titleBuf = textBuffer;
-					break;
-				case 'link':
-					linkBuf = textBuffer;
-					break;
-				case 'guid':
-					guidBuf = textBuffer;
-					break;
-				case 'pubdate':
-					pubDateBuf = textBuffer;
-					break;
+			if (inItem) {
+				switch (currentField) {
+					case 'title':
+						titleBuf = textBuffer;
+						break;
+					case 'link':
+						linkBuf = textBuffer;
+						break;
+					case 'guid':
+						guidBuf = textBuffer;
+						break;
+					case 'pubdate':
+						pubDateBuf = textBuffer;
+						break;
+				}
+			} else {
+				switch (currentField) {
+					case 'title':
+						channelTitleBuf = textBuffer;
+						break;
+					case 'description':
+						channelDescriptionBuf = textBuffer;
+						break;
+					case 'link':
+						channelLinkBuf = textBuffer;
+						break;
+					case 'lastbuilddate':
+						channelLastBuildDateBuf = textBuffer;
+						break;
+				}
 			}
 			currentField = null;
 			textBuffer = '';
 		}
+
+		pathStack.pop();
 	};
 
 	parser.ontext = (text) => {
-		if (inItem && currentField !== null) {
+		if (currentField !== null) {
 			textBuffer += text;
 		}
 	};
 
 	parser.oncdata = (text) => {
-		if (inItem && currentField !== null) {
+		if (currentField !== null) {
 			textBuffer += text;
 		}
 	};
 
 	parser.write(xmlText).close();
-	return articles;
+
+	return {
+		metadata: {
+			type: 'rss',
+			title: normalizeString(channelTitleBuf),
+			description: normalizeString(channelDescriptionBuf),
+			htmlUrl: canonicalizeHttpUrl(normalizeString(channelLinkBuf)),
+			lastBuildDate: parseDate(channelLastBuildDateBuf),
+		},
+		articles,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -349,34 +396,44 @@ function selectAtomLink(links) {
 
 /**
  * Parse an Atom 1.0 feed XML string using sax event-driven parsing.
- * Tracks id, title, published, updated, and link candidates within <entry>
- * elements. Ignores content, summary, author, category, rights.
  *
  * @param {string} xmlText
  * @param {string} feedId
- * @returns {Array<{ id: string|null, link: string|null, title: string|null, published: string|null, updated: string|null }>}
+ * @returns {{
+ *   metadata: {
+ *     type: 'atom',
+ *     title: string|null,
+ *     description: string|null,
+ *     htmlUrl: string|null,
+ *     lastBuildDate: string|null
+ *   },
+ *   articles: Array<{ id: string|null, link: string|null, title: string|null, published: string|null, updated: string|null }>
+ * }}
  * @throws {Error} - If XML is malformed (message starts with "Invalid XML:")
  */
 function parseAtomFeed(xmlText, feedId) {
 	const parser = sax.parser(true, { xmlns: false, trim: false });
 
 	const articles = [];
+	const pathStack = [];
 	let inEntry = false;
 
-	// Field buffers for the current entry
+	let feedTitleBuf = null;
+	let feedSubtitleBuf = null;
+	let feedUpdatedBuf = null;
+	let feedLinks = [];
+
 	let atomIdBuf = null;
 	let titleBuf = null;
 	let publishedBuf = null;
 	let updatedBuf = null;
 	let links = [];
 
-	// Text buffering state
 	let currentField = null;
 	let textBuffer = '';
-
-	// Link state: tracking the current <link> element's attributes and text
 	let currentLinkHref = null;
 	let currentLinkRel = null;
+	let linkTarget = null;
 	let inLink = false;
 
 	parser.onerror = (err) => {
@@ -385,6 +442,7 @@ function parseAtomFeed(xmlText, feedId) {
 
 	parser.onopentag = (node) => {
 		const tag = normalizeTagName(node.name);
+		pathStack.push(tag);
 
 		if (tag === 'entry') {
 			inEntry = true;
@@ -398,38 +456,43 @@ function parseAtomFeed(xmlText, feedId) {
 			inLink = false;
 			currentLinkHref = null;
 			currentLinkRel = null;
+			linkTarget = null;
 			return;
 		}
 
-		if (!inEntry) return;
+		const parentTag = pathStack[pathStack.length - 2] ?? null;
 
 		if (tag === 'link') {
-			// Capture href and rel attributes; will buffer text as fallback
 			const attrs = node.attributes || {};
 			currentLinkHref = normalizeString(attrs.href || null);
 			currentLinkRel = normalizeString(attrs.rel || null);
+			linkTarget = inEntry ? 'entry' : parentTag === 'feed' ? 'feed' : null;
 			inLink = true;
-			// Buffer text in case there is no href attribute
-			currentField = null; // don't use the main currentField for link text
+			currentField = null;
 			textBuffer = '';
 			return;
 		}
 
-		// Tracked text fields
-		if (tag === 'id' || tag === 'title' || tag === 'published' || tag === 'updated') {
-			currentField = tag;
-			textBuffer = '';
+		if (inEntry && parentTag === 'entry') {
+			if (tag === 'id' || tag === 'title' || tag === 'published' || tag === 'updated') {
+				currentField = tag;
+				textBuffer = '';
+			}
 			return;
 		}
 
-		// Ignored fields: content, summary, author, category, rights — do not set currentField
+		if (!inEntry && parentTag === 'feed') {
+			if (tag === 'title' || tag === 'subtitle' || tag === 'updated') {
+				currentField = tag;
+				textBuffer = '';
+			}
+		}
 	};
 
 	parser.onclosetag = (name) => {
 		const tag = normalizeTagName(name);
 
 		if (tag === 'entry') {
-			// Select the best link from collected candidates
 			const link = selectAtomLink(links);
 			const atomId = normalizeString(atomIdBuf);
 			const title = normalizeString(titleBuf);
@@ -450,51 +513,70 @@ function parseAtomFeed(xmlText, feedId) {
 			inLink = false;
 			currentLinkHref = null;
 			currentLinkRel = null;
+			linkTarget = null;
+			pathStack.pop();
 			return;
 		}
 
-		if (!inEntry) return;
-
 		if (tag === 'link') {
-			// Commit link candidate: prefer href attribute, fall back to text content
 			let href = currentLinkHref;
 			if (href === null) {
-				// Use buffered text as fallback
 				href = normalizeString(textBuffer);
 			}
-			links.push({ href, rel: currentLinkRel });
+
+			if (linkTarget === 'entry') {
+				links.push({ href, rel: currentLinkRel });
+			} else if (linkTarget === 'feed') {
+				feedLinks.push({ href, rel: currentLinkRel });
+			}
+
 			inLink = false;
 			currentLinkHref = null;
 			currentLinkRel = null;
+			linkTarget = null;
 			textBuffer = '';
+			pathStack.pop();
 			return;
 		}
 
-		// Commit tracked text fields
 		if (currentField !== null && tag === currentField) {
-			switch (currentField) {
-				case 'id':
-					atomIdBuf = textBuffer;
-					break;
-				case 'title':
-					titleBuf = textBuffer;
-					break;
-				case 'published':
-					publishedBuf = textBuffer;
-					break;
-				case 'updated':
-					updatedBuf = textBuffer;
-					break;
+			if (inEntry) {
+				switch (currentField) {
+					case 'id':
+						atomIdBuf = textBuffer;
+						break;
+					case 'title':
+						titleBuf = textBuffer;
+						break;
+					case 'published':
+						publishedBuf = textBuffer;
+						break;
+					case 'updated':
+						updatedBuf = textBuffer;
+						break;
+				}
+			} else {
+				switch (currentField) {
+					case 'title':
+						feedTitleBuf = textBuffer;
+						break;
+					case 'subtitle':
+						feedSubtitleBuf = textBuffer;
+						break;
+					case 'updated':
+						feedUpdatedBuf = textBuffer;
+						break;
+				}
 			}
 			currentField = null;
 			textBuffer = '';
 		}
+
+		pathStack.pop();
 	};
 
 	parser.ontext = (text) => {
-		if (!inEntry) return;
 		if (inLink && currentLinkHref === null) {
-			// Accumulate text for link fallback
 			textBuffer += text;
 		} else if (currentField !== null) {
 			textBuffer += text;
@@ -502,7 +584,6 @@ function parseAtomFeed(xmlText, feedId) {
 	};
 
 	parser.oncdata = (text) => {
-		if (!inEntry) return;
 		if (inLink && currentLinkHref === null) {
 			textBuffer += text;
 		} else if (currentField !== null) {
@@ -511,7 +592,17 @@ function parseAtomFeed(xmlText, feedId) {
 	};
 
 	parser.write(xmlText).close();
-	return articles;
+
+	return {
+		metadata: {
+			type: 'atom',
+			title: normalizeString(feedTitleBuf),
+			description: normalizeString(feedSubtitleBuf),
+			htmlUrl: canonicalizeHttpUrl(selectAtomLink(feedLinks)),
+			lastBuildDate: parseDate(feedUpdatedBuf),
+		},
+		articles,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -531,13 +622,41 @@ export function parseFeedXml(xmlText, feedId) {
 	const format = detectFeedFormat(xmlText);
 
 	if (format === 'rss') {
-		return parseRssFeed(xmlText, feedId);
+		return parseRssFeed(xmlText, feedId).articles;
 	}
 
 	if (format === 'atom') {
-		return parseAtomFeed(xmlText, feedId);
+		return parseAtomFeed(xmlText, feedId).articles;
 	}
 
 	// Unrecognized root or non-XML input
 	return [];
+}
+
+/**
+ * Parse raw XML text and return only the feed-level metadata needed by the
+ * add-feed confirmation flow.
+ *
+ * @param {string} xmlText - The raw feed XML
+ * @returns {{
+ *   type: 'rss'|'atom',
+ *   title: string|null,
+ *   description: string|null,
+ *   htmlUrl: string|null,
+ *   lastBuildDate: string|null
+ * }|null}
+ * @throws {Error} - If the XML is malformed (message starts with "Invalid XML:")
+ */
+export function parseFeedPreview(xmlText) {
+	const format = detectFeedFormat(xmlText);
+
+	if (format === 'rss') {
+		return parseRssFeed(xmlText, 'preview-feed').metadata;
+	}
+
+	if (format === 'atom') {
+		return parseAtomFeed(xmlText, 'preview-feed').metadata;
+	}
+
+	return null;
 }

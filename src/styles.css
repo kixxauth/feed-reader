@@ -99,6 +99,50 @@ p, li, h1, h2, h3, h4, h5, h6 {
     overflow-wrap: break-word;
 }
 
+.page-actions {
+    margin: 1rem 0;
+}
+
+.button-link,
+button {
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    color: var(--color-on-background);
+    cursor: pointer;
+    display: inline-block;
+    padding: 0.4rem 0.75rem;
+    text-decoration: none;
+}
+
+button:hover,
+.button-link:hover {
+    opacity: 0.8;
+}
+
+.notice {
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    margin: 0 0 1rem;
+    padding: 0.85rem 1rem;
+}
+
+.notice-success {
+    background: hsla(140, 40%, 18%, 1);
+}
+
+.notice-info {
+    background: hsla(210, 40%, 18%, 1);
+}
+
+.notice-warning {
+    background: hsla(35, 45%, 18%, 1);
+}
+
+.notice-error {
+    background: hsla(0, 40%, 18%, 1);
+}
+
 .feed-list {
     list-style: none;
     padding: 0;
@@ -324,4 +368,68 @@ p, li, h1, h2, h3, h4, h5, h6 {
     margin-bottom: 1rem;
     font-size: 0.9em;
     opacity: 0.85;
+}
+
+/* -----------------------------------------------------------------------
+   Add feed workflow
+   ----------------------------------------------------------------------- */
+
+.add-feed-page {
+    max-width: 800px;
+}
+
+.add-feed-form {
+    display: grid;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    max-width: 40rem;
+}
+
+.add-feed-form input {
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    color: inherit;
+    padding: 0.5rem 0.6rem;
+}
+
+.add-feed-selection,
+.add-feed-confirmation,
+.add-feed-fallback {
+    border-top: 1px solid currentColor;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+}
+
+.feed-candidate-list {
+    display: grid;
+    gap: 1rem;
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+}
+
+.feed-candidate-card {
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: space-between;
+    padding: 1rem;
+}
+
+.feed-candidate-meta {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.feed-candidate-type {
+    opacity: 0.75;
+    font-size: 0.9em;
+}
+
+code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.95em;
 }

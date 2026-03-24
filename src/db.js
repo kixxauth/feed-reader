@@ -9,7 +9,9 @@
  *   ARTICLES_PAGE_SIZE         — articles per page (20), used by articles route handler
  *   getFeedsPaginated          — returns one page of feeds plus the total count; accepts optional { disabledOnly } to filter to no_crawl = 1
  *   getFeedById                — returns a single feed by id, or null if not found
+ *   getFeedByXmlUrl            — returns a single feed by normalized xml_url, or null if not found
  *   getArticlesByFeedPaginated — returns paginated articles for a feed with optional date filtering
+ *   createFeed                 — inserts a single feed row for UI-driven feed creation
  *   upsertFeed                 — insert-or-update a single feed row (used by future admin endpoints)
  *   getEnabledFeeds            — returns all feeds where no_crawl = 0 (used by crawl module)
  *   getCrawlRuns               — returns the most recent N crawl runs (for history page)
@@ -23,7 +25,10 @@
  *   resetFeedFailureCount      — sets consecutive_failure_count = 0 for a feed
  *   insertArticle              — inserts a single article, ON CONFLICT DO NOTHING
  *   getRecentActivityForFeed   — returns the most recent N crawl_run_details rows for a feed, joined with crawl_runs
+ *   getCrawlRunDetailByFeed    — returns one crawl_run_details row for a crawl run + feed pair
  */
+
+import { canonicalizeHttpUrl, normalizeUrlForComparison } from './feed-utils.js';
 
 export const PAGE_SIZE = 50;
 export const ARTICLES_PAGE_SIZE = 20;
@@ -63,6 +68,26 @@ export async function getFeedsPaginated(db, page, { disabledOnly = false } = {})
  */
 export async function getFeedById(db, feedId) {
 	const row = await db.prepare('SELECT * FROM feeds WHERE id = ?').bind(feedId).first();
+	return row ?? null;
+}
+
+/**
+ * Return a single feed by normalized xml_url, or null if not found.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} xmlUrl - The feed URL to look up
+ * @returns {Promise<Object|null>}
+ */
+export async function getFeedByXmlUrl(db, xmlUrl) {
+	const normalizedUrl = normalizeUrlForComparison(xmlUrl);
+	if (!normalizedUrl) {
+		return null;
+	}
+
+	const row = await db
+		.prepare('SELECT * FROM feeds WHERE xml_url IS NOT NULL AND LOWER(TRIM(xml_url)) = ?')
+		.bind(normalizedUrl)
+		.first();
 	return row ?? null;
 }
 
@@ -115,11 +140,53 @@ export async function getArticlesByFeedPaginated(db, feedId, page, fromDate, toD
 }
 
 /**
+ * Insert a new feed row.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {{
+ *   id: string,
+ *   hostname: string,
+ *   type: string|null,
+ *   title: string,
+ *   xml_url: string,
+ *   html_url: string|null,
+ *   no_crawl: number,
+ *   description: string|null,
+ *   last_build_date: string|null,
+ *   score: number|null
+ * }} feedData - The feed data to insert
+ * @returns {Promise<D1Result>}
+ */
+export async function createFeed(db, feedData) {
+	const sql = `
+		INSERT INTO feeds (id, hostname, type, title, xml_url, html_url, no_crawl, description, last_build_date, score)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`;
+
+	return db
+		.prepare(sql)
+		.bind(
+			feedData.id,
+			feedData.hostname,
+			feedData.type ?? null,
+			feedData.title,
+			canonicalizeHttpUrl(feedData.xml_url),
+			canonicalizeHttpUrl(feedData.html_url),
+			feedData.no_crawl ?? 0,
+			feedData.description ?? null,
+			feedData.last_build_date ?? null,
+			feedData.score ?? null
+		)
+		.run();
+}
+
+/**
  * Insert a feed row, or update all fields if a feed with the same id already exists.
  *
  * Note: bulk importing is handled by scripts/import-feeds.js (Node.js CLI), which
- * generates its own inline SQL rather than calling this function. This function is
- * here for use by future Worker-side admin API endpoints (e.g., POST /admin/feeds).
+ * generates its own inline SQL rather than calling this function. Worker-side
+ * user feed creation uses createFeed(); upsertFeed remains available for import-
+ * style or future administrative flows that intentionally update existing ids.
  *
  * @param {D1Database} db - The D1 database binding
  * @param {{
@@ -137,6 +204,9 @@ export async function getArticlesByFeedPaginated(db, feedId, page, fromDate, toD
  * @returns {Promise<D1Result>}
  */
 export async function upsertFeed(db, feedData) {
+	const xmlUrl = canonicalizeHttpUrl(feedData.xml_url);
+	const htmlUrl = canonicalizeHttpUrl(feedData.html_url);
+
 	const sql = `
 		INSERT INTO feeds (id, hostname, type, title, xml_url, html_url, no_crawl, description, last_build_date, score)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -160,8 +230,8 @@ export async function upsertFeed(db, feedData) {
 			feedData.hostname,
 			feedData.type ?? null,
 			feedData.title,
-			feedData.xml_url ?? null,
-			feedData.html_url ?? null,
+			xmlUrl,
+			htmlUrl,
 			feedData.no_crawl ?? 0,
 			feedData.description ?? null,
 			feedData.last_build_date ?? null,
@@ -394,4 +464,21 @@ export async function getRecentActivityForFeed(db, feedId, limit = 5) {
 	`;
 	const result = await db.prepare(sql).bind(feedId, limit).all();
 	return result.results;
+}
+
+/**
+ * Return one crawl_run_details row for the given crawl run + feed pair, or null
+ * if the background crawl has not recorded a result yet.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} crawlRunId - The crawl run id
+ * @param {string} feedId - The feed id
+ * @returns {Promise<Object|null>}
+ */
+export async function getCrawlRunDetailByFeed(db, crawlRunId, feedId) {
+	const row = await db
+		.prepare('SELECT * FROM crawl_run_details WHERE crawl_run_id = ? AND feed_id = ?')
+		.bind(crawlRunId, feedId)
+		.first();
+	return row ?? null;
 }

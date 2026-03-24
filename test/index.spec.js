@@ -3,7 +3,9 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import worker from '../src';
 import { createSession } from '../src/auth/session.js';
 import { createState, consumeState } from '../src/auth/state.js';
-import { performCrawl } from '../src/crawl.js';
+import { performCrawl, performFeedCrawl } from '../src/crawl.js';
+import { discoverFeedTargets, previewDirectFeedUrl, ADD_FEED_MESSAGES } from '../src/feed-discovery.js';
+import { parseFeedPreview } from '../src/parser.js';
 
 // ---------------------------------------------------------------------------
 // Helper: create an authenticated request with a valid session cookie
@@ -988,7 +990,7 @@ describe('Crawl history page', () => {
 				feed_id: 'feed-missing',
 				status: 'failed',
 				articles_added: 0,
-				error_message: 'HTTP 404',
+				error_message: 'Could not reach the feed URL (network error or server unavailable)',
 				auto_disabled: 0,
 			},
 		]);
@@ -1010,7 +1012,7 @@ describe('Crawl history page', () => {
 		expect(body).toContain('success');
 		expect(body).toContain('failed');
 		// Error message for failed feed
-		expect(body).toContain('HTTP 404');
+		expect(body).toContain('Could not reach the feed URL (network error or server unavailable)');
 		// Fallback to feed_id for deleted feed (no link — detail page would 404)
 		expect(body).toContain('feed-missing');
 	});
@@ -1144,6 +1146,172 @@ function makeRssFeed(items = []) {
   </channel>
 </rss>`;
 }
+
+function makeAtomFeed(entries = []) {
+	const entriesXml = entries
+		.map(
+			({ id, link, title, published, updated }) => `
+    <entry>
+      ${id ? `<id>${id}</id>` : ''}
+      ${title ? `<title>${title}</title>` : ''}
+      ${link ? `<link rel="alternate" href="${link}" />` : ''}
+      ${published ? `<published>${published}</published>` : ''}
+      ${updated ? `<updated>${updated}</updated>` : ''}
+    </entry>`
+		)
+		.join('');
+
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom Test Feed</title>
+  <subtitle>Atom subtitle</subtitle>
+  <link rel="alternate" href="https://atom.example.com" />
+  <updated>2026-03-24T00:00:00Z</updated>
+  ${entriesXml}
+</feed>`;
+}
+
+function makeWebsiteHtml(feedLinks = []) {
+	const linksHtml = feedLinks
+		.map(
+			({ href, rel = 'alternate', type = 'application/rss+xml' }) =>
+				`<link rel="${rel}" type="${type}" href="${href}">`
+		)
+		.join('');
+
+	return `<!doctype html>
+<html lang="en">
+  <head>
+    <title>Example Site</title>
+    ${linksHtml}
+  </head>
+  <body>
+    <h1>Example Site</h1>
+  </body>
+</html>`;
+}
+
+describe('Feed preview parsing', () => {
+	it('parseFeedPreview extracts RSS metadata', () => {
+		const preview = parseFeedPreview(
+			`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>RSS Preview Feed</title>
+    <description>Preview description</description>
+    <link>https://rss.example.com</link>
+    <lastBuildDate>Tue, 24 Mar 2026 12:00:00 GMT</lastBuildDate>
+  </channel>
+</rss>`
+		);
+
+		expect(preview).toEqual({
+			type: 'rss',
+			title: 'RSS Preview Feed',
+			description: 'Preview description',
+			htmlUrl: 'https://rss.example.com/',
+			lastBuildDate: '2026-03-24T12:00:00.000Z',
+		});
+	});
+
+	it('parseFeedPreview extracts Atom metadata', () => {
+		const preview = parseFeedPreview(makeAtomFeed([{ id: 'entry-1', link: 'https://atom.example.com/1', title: 'Entry 1' }]));
+		expect(preview).toEqual({
+			type: 'atom',
+			title: 'Atom Test Feed',
+			description: 'Atom subtitle',
+			htmlUrl: 'https://atom.example.com/',
+			lastBuildDate: '2026-03-24T00:00:00.000Z',
+		});
+	});
+});
+
+describe('Feed discovery', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it('discoverFeedTargets treats a direct RSS URL as a feed candidate', async () => {
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(makeRssFeed([{ guid: 'entry-1', link: 'https://example.com/1', title: 'Article 1' }]), {
+				headers: { 'Content-Type': 'application/rss+xml' },
+			})
+		);
+
+		const result = await discoverFeedTargets('https://example.com/feed.xml');
+		expect(result.kind).toBe('direct');
+		expect(result.candidate.xmlUrl).toBe('https://example.com/feed.xml');
+		expect(result.candidate.title).toBe('Test Feed');
+		expect(result.candidate.htmlUrl).toBe('https://example.com/');
+	});
+
+	it('discoverFeedTargets discovers multiple website feeds', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+			if (String(url) === 'https://example.com/') {
+				return new Response(
+					makeWebsiteHtml([
+						{ href: '/feed.xml', type: 'application/rss+xml' },
+						{ href: '/atom.xml', type: 'application/atom+xml' },
+					]),
+					{ headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+				);
+			}
+
+			if (String(url) === 'https://example.com/feed.xml') {
+				return new Response(makeRssFeed(), {
+					headers: { 'Content-Type': 'application/rss+xml' },
+				});
+			}
+
+			if (String(url) === 'https://example.com/atom.xml') {
+				return new Response(makeAtomFeed(), {
+					headers: { 'Content-Type': 'application/atom+xml' },
+				});
+			}
+
+			return new Response('Not Found', { status: 404 });
+		});
+
+		const result = await discoverFeedTargets('https://example.com');
+		expect(result.kind).toBe('multiple');
+		expect(result.candidates).toHaveLength(2);
+		expect(result.candidates.map((candidate) => candidate.xmlUrl)).toEqual([
+			'https://example.com/feed.xml',
+			'https://example.com/atom.xml',
+		]);
+	});
+
+	it('discoverFeedTargets returns none when a website has no discoverable feeds', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+			if (String(url) === 'https://example.com/') {
+				return new Response(makeWebsiteHtml(), {
+					headers: { 'Content-Type': 'text/html; charset=utf-8' },
+				});
+			}
+
+			return new Response('Not Found', { status: 404 });
+		});
+
+		const result = await discoverFeedTargets('https://example.com');
+		expect(result).toEqual({
+			kind: 'none',
+			submittedUrl: 'https://example.com/',
+		});
+	});
+
+	it('previewDirectFeedUrl maps timeouts to the canonical message', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(
+			() =>
+				new Promise((_, reject) => {
+					setTimeout(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), 0);
+				})
+		);
+
+		await expect(previewDirectFeedUrl('https://example.com/feed.xml')).rejects.toMatchObject({
+			message: ADD_FEED_MESSAGES.timeout,
+		});
+	});
+});
 
 describe('Crawl functionality', () => {
 	beforeEach(async () => {
@@ -1369,7 +1537,7 @@ describe('Crawl functionality', () => {
 		).bind('feed-1').first();
 		expect(detail).toBeTruthy();
 		expect(detail.status).toBe('failed');
-		expect(detail.error_message).toBe('HTTP 404');
+		expect(detail.error_message).toBe('Could not reach the feed URL (network error or server unavailable)');
 	});
 
 	it('performCrawl returns summary with correct counts', async () => {
@@ -1419,6 +1587,35 @@ describe('Crawl functionality', () => {
 		expect(run.total_feeds_attempted).toBe(2);
 		expect(run.total_feeds_failed).toBe(1);
 		expect(run.total_articles_added).toBe(2);
+	});
+
+	it('performFeedCrawl records a failed single-feed crawl with the invalid-content message', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-1',
+				hostname: 'example.com',
+				title: 'Example Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+			},
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response('<html><body>not a feed</body></html>', {
+				headers: { 'Content-Type': 'text/html; charset=utf-8' },
+			})
+		);
+
+		const summary = await performFeedCrawl(env.DB, 'feed-1', 'single-run-1');
+		expect(summary.crawlRunId).toBe('single-run-1');
+		expect(summary.totalFeeds).toBe(1);
+		expect(summary.totalFailed).toBe(1);
+
+		const detail = await env.DB
+			.prepare('SELECT * FROM crawl_run_details WHERE crawl_run_id = ? AND feed_id = ?')
+			.bind('single-run-1', 'feed-1')
+			.first();
+		expect(detail.error_message).toBe('The feed returned invalid content');
 	});
 });
 
@@ -1880,5 +2077,236 @@ describe('Articles page — list context', () => {
 		const body = await response.text();
 		expect(body).toContain('href="/feeds"');
 		expect(body).not.toContain('href="/feeds?');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Add feed flow
+// ---------------------------------------------------------------------------
+describe('Add feed flow', () => {
+	beforeEach(async () => {
+		await clearArticles();
+		await clearFeeds();
+		await clearCrawlRuns();
+		await clearCrawlRunDetails();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	async function makeAuthenticatedFormRequest(url, formData) {
+		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+		return new Request(url, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				Cookie: `feed_reader_session=${sessionId}`,
+			},
+			body: new URLSearchParams(formData).toString(),
+		});
+	}
+
+	it('GET /feeds/add renders the URL form and Back link', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/add');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('<h1>Add Feed</h1>');
+		expect(body).toContain('name="url"');
+		expect(body).toContain('action="/api/feeds/add"');
+		expect(body).toContain('href="/feeds"');
+	});
+
+	it('POST /api/feeds/add with an invalid URL shows the canonical message', async () => {
+		const request = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'submit',
+			url: 'ftp://example.com/feed.xml',
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain(ADD_FEED_MESSAGES.invalidUrl);
+		expect(body).toContain('value="ftp://example.com/feed.xml"');
+	});
+
+	it('POST /api/feeds/add with a duplicate feed shows a link to the existing feed', async () => {
+		await seedFeeds([
+			{
+				id: 'existing-feed',
+				hostname: 'example.com',
+				title: 'Existing Feed',
+				xml_url: 'https://example.com/feed.xml',
+				html_url: 'https://example.com',
+			},
+		]);
+
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(makeRssFeed(), { headers: { 'Content-Type': 'application/rss+xml' } })
+		);
+
+		const request = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'submit',
+			url: '  HTTPS://EXAMPLE.COM/feed.xml  ',
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		const body = await response.text();
+		expect(body).toContain('This feed is already in your subscriptions.');
+		expect(body).toContain('href="/feeds/existing-feed"');
+	});
+
+	it('POST /api/feeds/add discovers multiple website feeds and renders the selection step', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+			if (String(url) === 'https://example.com/') {
+				return new Response(
+					makeWebsiteHtml([
+						{ href: '/feed.xml', type: 'application/rss+xml' },
+						{ href: '/atom.xml', type: 'application/atom+xml' },
+					]),
+					{ headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+				);
+			}
+
+			if (String(url) === 'https://example.com/feed.xml') {
+				return new Response(makeRssFeed(), {
+					headers: { 'Content-Type': 'application/rss+xml' },
+				});
+			}
+
+			if (String(url) === 'https://example.com/atom.xml') {
+				return new Response(makeAtomFeed(), {
+					headers: { 'Content-Type': 'application/atom+xml' },
+				});
+			}
+
+			return new Response('Not Found', { status: 404 });
+		});
+
+		const request = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'submit',
+			url: 'https://example.com',
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		const body = await response.text();
+		expect(body).toContain('Select a Feed');
+		expect(body).toContain('https://example.com/feed.xml');
+		expect(body).toContain('https://example.com/atom.xml');
+	});
+
+	it('POST /api/feeds/add shows the fallback direct-feed input when no feeds are found', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+			if (String(url) === 'https://example.com/') {
+				return new Response(makeWebsiteHtml(), {
+					headers: { 'Content-Type': 'text/html; charset=utf-8' },
+				});
+			}
+
+			return new Response('Not Found', { status: 404 });
+		});
+
+		const request = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'submit',
+			url: 'https://example.com',
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		const body = await response.text();
+		expect(body).toContain(ADD_FEED_MESSAGES.noFeedsFound);
+		expect(body).toContain('name="fallbackUrl"');
+	});
+
+	it('confirming a direct feed creates the feed and redirects with add-feed banners', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(
+			async () =>
+				new Response(makeRssFeed([{ guid: 'guid-1', link: 'https://example.com/1', title: 'Article One' }]), {
+					headers: { 'Content-Type': 'application/rss+xml' },
+				})
+		);
+
+		const previewRequest = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'submit',
+			url: 'https://example.com/feed.xml',
+		});
+		const previewCtx = createExecutionContext();
+		const previewResponse = await worker.fetch(previewRequest, env, previewCtx);
+		await waitOnExecutionContext(previewCtx);
+		const previewBody = await previewResponse.text();
+		const previewState = previewBody.match(/name="previewState" value="([^"]+)"/)?.[1];
+		expect(previewState).toBeTruthy();
+
+		const confirmRequest = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'confirm',
+			previewState,
+		});
+		const confirmCtx = createExecutionContext();
+		const confirmResponse = await worker.fetch(confirmRequest, env, confirmCtx);
+		await waitOnExecutionContext(confirmCtx);
+		expect(confirmResponse.status).toBe(303);
+		expect(confirmResponse.headers.get('location')).toMatch(/^\/feeds\?addedFeedId=.*crawlRunId=/);
+
+		const { results: feeds } = await env.DB.prepare('SELECT * FROM feeds').all();
+		expect(feeds).toHaveLength(1);
+		expect(feeds[0].xml_url).toBe('https://example.com/feed.xml');
+
+		const feedsPageRequest = await makeAuthenticatedRequest(`http://example.com${confirmResponse.headers.get('location')}`);
+		const feedsPageCtx = createExecutionContext();
+		const feedsPageResponse = await worker.fetch(feedsPageRequest, env, feedsPageCtx);
+		await waitOnExecutionContext(feedsPageCtx);
+		const feedsPageBody = await feedsPageResponse.text();
+		expect(feedsPageBody).toContain('Feed added successfully.');
+		expect(feedsPageBody).toContain('Initial crawl completed');
+		expect(feedsPageBody).toContain('Add Feed');
+	});
+
+	it('confirming a direct feed with a failed immediate crawl shows the warning banner on /feeds', async () => {
+		let fetchCount = 0;
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+			fetchCount += 1;
+			if (fetchCount === 1) {
+				return new Response(makeRssFeed([{ guid: 'guid-1', link: 'https://example.com/1', title: 'Article One' }]), {
+					headers: { 'Content-Type': 'application/rss+xml' },
+				});
+			}
+
+			return new Response('<html><body>not a feed</body></html>', {
+				headers: { 'Content-Type': 'text/html; charset=utf-8' },
+			});
+		});
+
+		const previewRequest = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'submit',
+			url: 'https://example.com/feed.xml',
+		});
+		const previewCtx = createExecutionContext();
+		const previewResponse = await worker.fetch(previewRequest, env, previewCtx);
+		await waitOnExecutionContext(previewCtx);
+		const previewBody = await previewResponse.text();
+		const previewState = previewBody.match(/name="previewState" value="([^"]+)"/)?.[1];
+		expect(previewState).toBeTruthy();
+
+		const confirmRequest = await makeAuthenticatedFormRequest('http://example.com/api/feeds/add', {
+			intent: 'confirm',
+			previewState,
+		});
+		const confirmCtx = createExecutionContext();
+		const confirmResponse = await worker.fetch(confirmRequest, env, confirmCtx);
+		await waitOnExecutionContext(confirmCtx);
+
+		const feedsPageRequest = await makeAuthenticatedRequest(`http://example.com${confirmResponse.headers.get('location')}`);
+		const feedsPageCtx = createExecutionContext();
+		const feedsPageResponse = await worker.fetch(feedsPageRequest, env, feedsPageCtx);
+		await waitOnExecutionContext(feedsPageCtx);
+		const feedsPageBody = await feedsPageResponse.text();
+		expect(feedsPageBody).toContain('Feed added, but could not fetch articles yet.');
+		expect(feedsPageBody).toContain('The feed returned invalid content');
 	});
 });

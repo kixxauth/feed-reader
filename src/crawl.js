@@ -12,9 +12,10 @@
  * suitable for logging by the scheduled handler.
  */
 
-import { parseFeedXml } from './parser.js';
+import { parseFeedPreview, parseFeedXml } from './parser.js';
 import {
 	getEnabledFeeds,
+	getFeedById,
 	resetFeedFailureCount,
 	updateFeedFailureCount,
 	disableFeed,
@@ -77,21 +78,42 @@ async function fetchFeedXml(url) {
  */
 async function processFeed(feed, startedAt, db) {
 	if (!feed.xml_url) {
-		return { status: 'failed', articlesAdded: 0, errorMessage: 'No xml_url configured for feed' };
+		return {
+			status: 'failed',
+			articlesAdded: 0,
+			errorMessage: 'Could not reach the feed URL (network error or server unavailable)',
+		};
 	}
 
 	let xmlText;
 	try {
 		xmlText = await fetchFeedXml(feed.xml_url);
 	} catch (err) {
-		return { status: 'failed', articlesAdded: 0, errorMessage: err.message };
+		return {
+			status: 'failed',
+			articlesAdded: 0,
+			errorMessage: normalizeCrawlErrorMessage(err.message),
+		};
 	}
 
 	let articles;
 	try {
+		const preview = parseFeedPreview(xmlText);
+		if (!preview) {
+			return {
+				status: 'failed',
+				articlesAdded: 0,
+				errorMessage: 'The feed returned invalid content',
+			};
+		}
+
 		articles = parseFeedXml(xmlText, feed.id);
 	} catch (err) {
-		return { status: 'failed', articlesAdded: 0, errorMessage: err.message };
+		return {
+			status: 'failed',
+			articlesAdded: 0,
+			errorMessage: normalizeCrawlErrorMessage(err.message),
+		};
 	}
 
 	let articlesAdded = 0;
@@ -118,21 +140,34 @@ async function processFeed(feed, startedAt, db) {
 }
 
 /**
- * Crawl all enabled feeds, insert new articles, track failures, and record
- * crawl history. This is the main entry point called by the scheduled handler.
+ * Normalize low-level crawl errors into user-facing messages for immediate
+ * crawl status and crawl history detail rows.
  *
- * Database errors (from history recording or failure tracking) are allowed to
- * propagate so the scheduled handler can log them. One feed's failure does not
- * stop the crawl; processing continues to the next feed.
+ * @param {string} message
+ * @returns {string}
+ */
+function normalizeCrawlErrorMessage(message) {
+	if (message.startsWith('Invalid XML:')) {
+		return 'Failed to parse the feed XML';
+	}
+
+	if (message === 'Request timeout (30s)' || message.startsWith('HTTP ') || message.length > 0) {
+		return 'Could not reach the feed URL (network error or server unavailable)';
+	}
+
+	return 'Could not reach the feed URL (network error or server unavailable)';
+}
+
+/**
+ * Crawl a specific list of feeds, record history, and return the summary.
  *
- * @param {D1Database} db - The D1 database binding (env.DB)
+ * @param {D1Database} db
+ * @param {Array<object>} feeds
+ * @param {string} crawlRunId
  * @returns {Promise<{ crawlRunId: string, totalFeeds: number, totalFailed: number, totalArticlesAdded: number }>}
  */
-export async function performCrawl(db) {
-	const crawlRunId = crypto.randomUUID();
+async function performCrawlForFeeds(db, feeds, crawlRunId) {
 	const startedAt = new Date().toISOString();
-
-	const feeds = await getEnabledFeeds(db);
 
 	let totalFailed = 0;
 	let totalArticlesAdded = 0;
@@ -143,16 +178,13 @@ export async function performCrawl(db) {
 		let autoDisabled = 0;
 
 		if (feedResult.status === 'success') {
-			// Reset consecutive failure count on a successful crawl
 			await resetFeedFailureCount(db, feed.id);
 			totalArticlesAdded += feedResult.articlesAdded;
 		} else {
-			// Failure: increment consecutive failure count
 			totalFailed += 1;
 			const newFailureCount = (feed.consecutive_failure_count ?? 0) + 1;
 
 			if (newFailureCount >= AUTO_DISABLE_THRESHOLD) {
-				// Auto-disable the feed after 5 consecutive failures
 				await disableFeed(db, feed.id);
 				autoDisabled = 1;
 			} else {
@@ -160,7 +192,6 @@ export async function performCrawl(db) {
 			}
 		}
 
-		// Record per-feed detail row — status is 'auto_disabled' when feed was disabled
 		const detailStatus = autoDisabled ? 'auto_disabled' : feedResult.status;
 		await recordCrawlRunDetail(db, {
 			crawlRunId,
@@ -174,7 +205,6 @@ export async function performCrawl(db) {
 
 	const completedAt = new Date().toISOString();
 
-	// Record the crawl_runs summary row now that all feeds have been processed
 	await recordCrawlRun(db, {
 		id: crawlRunId,
 		startedAt,
@@ -190,4 +220,38 @@ export async function performCrawl(db) {
 		totalFailed,
 		totalArticlesAdded,
 	};
+}
+
+/**
+ * Crawl all enabled feeds, insert new articles, track failures, and record
+ * crawl history. This is the main entry point called by the scheduled handler.
+ *
+ * Database errors (from history recording or failure tracking) are allowed to
+ * propagate so the scheduled handler can log them. One feed's failure does not
+ * stop the crawl; processing continues to the next feed.
+ *
+ * @param {D1Database} db - The D1 database binding (env.DB)
+ * @returns {Promise<{ crawlRunId: string, totalFeeds: number, totalFailed: number, totalArticlesAdded: number }>}
+ */
+export async function performCrawl(db) {
+	const crawlRunId = crypto.randomUUID();
+	const feeds = await getEnabledFeeds(db);
+	return await performCrawlForFeeds(db, feeds, crawlRunId);
+}
+
+/**
+ * Crawl one feed immediately after it is added via the UI.
+ *
+ * @param {D1Database} db - The D1 database binding (env.DB)
+ * @param {string} feedId - The feed id to crawl
+ * @param {string} crawlRunId - The pre-generated crawl run id used by the redirect banner
+ * @returns {Promise<{ crawlRunId: string, totalFeeds: number, totalFailed: number, totalArticlesAdded: number }>}
+ */
+export async function performFeedCrawl(db, feedId, crawlRunId) {
+	const feed = await getFeedById(db, feedId);
+	if (feed === null) {
+		throw new Error(`Feed not found: ${feedId}`);
+	}
+
+	return await performCrawlForFeeds(db, [feed], crawlRunId);
 }
