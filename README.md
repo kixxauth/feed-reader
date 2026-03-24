@@ -47,6 +47,13 @@ This application uses the Vitest test framework. You can find the API for writin
 
 This application is built on Cloudflare Workers which has a specialized integration with Vitest you can learn more about here: https://developers.cloudflare.com/workers/testing/vitest-integration/
 
+## Deployment
+Be sure to run migrations before deploying. See [Database](#database) below.
+
+```bash
+npx wrangler deploy
+```
+
 ## Database
 
 This app uses a Cloudflare D1 SQLite database (binding name `DB`) to store feed metadata.
