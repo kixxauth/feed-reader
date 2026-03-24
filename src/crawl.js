@@ -13,6 +13,7 @@
  */
 
 import { parseFeedPreview, parseFeedXml } from './parser.js';
+import { resolveArticleUrl } from './feed-utils.js';
 import {
 	getEnabledFeeds,
 	getFeedById,
@@ -123,10 +124,12 @@ async function processFeed(feed, startedAt, db) {
 			continue;
 		}
 
+		const resolvedLink = resolveArticleUrl(article.link, feed.html_url || feed.xml_url);
+
 		const result = await insertArticle(db, {
 			id: article.id,
 			feedId: feed.id,
-			link: article.link,
+			link: resolvedLink,
 			title: article.title,
 			published: article.published,
 			updated: article.updated,

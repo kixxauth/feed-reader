@@ -2905,4 +2905,77 @@ describe('Reader page', () => {
 		const activePattern = /href="\/reader"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/reader"/;
 		expect(body).toMatch(activePattern);
 	});
+
+	// 13. Relative article links resolved to absolute URLs
+	it('resolves relative article links to absolute URLs using the feed html_url', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-rel',
+				hostname: 'blog.example.com',
+				title: 'Relative Links Feed',
+				xml_url: 'https://blog.example.com/feed.xml',
+				html_url: 'https://blog.example.com',
+			},
+		]);
+		await seedArticles([
+			{
+				id: 'art-rel-1',
+				feed_id: 'feed-rel',
+				title: 'Relative Path Article',
+				link: '/2017/09/26/some-article.html',
+				published: '2026-10-01',
+				added: '2026-10-01',
+			},
+			{
+				id: 'art-abs-1',
+				feed_id: 'feed-rel',
+				title: 'Absolute Path Article',
+				link: 'https://blog.example.com/2017/10/01/another-article.html',
+				published: '2026-10-01',
+				added: '2026-10-01',
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-10-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		// Relative link should be resolved against the feed's html_url
+		expect(body).toContain('href="https://blog.example.com/2017/09/26/some-article.html"');
+		// Absolute link should remain unchanged
+		expect(body).toContain('href="https://blog.example.com/2017/10/01/another-article.html"');
+	});
+
+	// 14. Relative article links resolved using xml_url when html_url is absent
+	it('resolves relative article links using xml_url when html_url is absent', async () => {
+		await seedFeeds([
+			{
+				id: 'feed-xmlbase',
+				hostname: 'news.example.com',
+				title: 'XML Base Feed',
+				xml_url: 'https://news.example.com/rss.xml',
+			},
+		]);
+		await seedArticles([
+			{
+				id: 'art-xmlbase-1',
+				feed_id: 'feed-xmlbase',
+				title: 'XML Base Article',
+				link: '/articles/test.html',
+				published: '2026-10-02',
+				added: '2026-10-02',
+			},
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-10-02');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="https://news.example.com/articles/test.html"');
+	});
 });

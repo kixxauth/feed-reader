@@ -514,6 +514,8 @@ export async function getDailyReaderArticles(db, selectedDate) {
 		SELECT
 			feeds.id AS feed_id,
 			feeds.title AS feed_title,
+			feeds.html_url AS feed_html_url,
+			feeds.xml_url AS feed_xml_url,
 			articles.id AS article_id,
 			articles.title AS article_title,
 			articles.link AS article_link,

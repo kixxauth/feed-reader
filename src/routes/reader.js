@@ -15,6 +15,7 @@
 import { renderLayout } from '../layout.js';
 import { getDailyReaderArticles } from '../db.js';
 import { escapeHtml } from '../html-utils.js';
+import { resolveArticleUrl } from '../feed-utils.js';
 import {
 	parseSelectedDate,
 	getPreviousDate,
@@ -38,6 +39,7 @@ export async function handleReader(c) {
 			groupMap.set(row.feed_id, {
 				feedId: row.feed_id,
 				feedTitle: row.feed_title,
+				feedBaseUrl: row.feed_html_url || row.feed_xml_url,
 				articles: [],
 			});
 		}
@@ -86,8 +88,9 @@ export async function handleReader(c) {
 								})
 							: 'Date unknown';
 
-						const titleHtml = article.article_link
-							? `<a href="${escapeHtml(article.article_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.article_title ?? '(no title)')}</a>`
+						const resolvedLink = resolveArticleUrl(article.article_link, group.feedBaseUrl);
+						const titleHtml = resolvedLink
+							? `<a href="${escapeHtml(resolvedLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.article_title ?? '(no title)')}</a>`
 							: `<span>${escapeHtml(article.article_title ?? '(no title)')}</span>`;
 
 						return `<li class="article-item">

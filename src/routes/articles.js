@@ -19,6 +19,7 @@
 import { renderLayout } from '../layout.js';
 import { getFeedById, getArticlesByFeedPaginated, ARTICLES_PAGE_SIZE } from '../db.js';
 import { escapeHtml } from '../html-utils.js';
+import { resolveArticleUrl } from '../feed-utils.js';
 
 const DATE_PARAM_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -103,11 +104,13 @@ export async function handleArticles(c) {
 	} else {
 		// Articles found — show filter form, article list, and pagination
 		const filterForm = buildFilterForm(feedId, fromDate, toDate);
+		const feedBaseUrl = feed.html_url || feed.xml_url;
 
 		const items = articles
 			.map((article) => {
-				const titleHtml = article.link
-					? `<a href="${escapeHtml(article.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.title)}</a>`
+				const resolvedLink = resolveArticleUrl(article.link, feedBaseUrl);
+				const titleHtml = resolvedLink
+					? `<a href="${escapeHtml(resolvedLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.title)}</a>`
 					: `<span class="article-title">${escapeHtml(article.title)}</span>`;
 
 				const formattedDate = article.published
