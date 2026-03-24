@@ -233,6 +233,19 @@ After login, the `nextUrl` is validated before redirecting:
 - Must not start with `//` (protocol-relative redirect)
 - Must not contain `\r` or `\n` (header injection)
 
+### Managing Access
+
+To **grant access** to a new user, update the `ALLOWED_EMAILS` secret with the full comma-separated list (including existing users):
+
+```bash
+npx wrangler secret put ALLOWED_EMAILS
+# Enter: existing@example.com,newuser@example.com
+```
+
+`wrangler secret put` replaces the entire value, so always supply the complete list. Only **verified** email addresses from GitHub are checked.
+
+To **revoke access**, run the same command and omit the email from the list. Note that any active session for that user will continue until it expires (up to `SESSION_TTL_SECONDS`). There is no mechanism to immediately invalidate a specific user's session short of deleting the KV key directly via the Cloudflare dashboard (`SESSIONS` namespace, key: `session:{sessionId}`).
+
 ---
 
 ## 4. Pages and Features
@@ -252,11 +265,23 @@ Protected. Displays all feeds with pagination, including feeds imported by CLI a
 - **Sort**: By `hostname ASC`
 - **Page size**: 50 feeds per page
 - **Pagination**: `?page=N` (1-indexed). Out-of-bounds pages are clamped to the last valid page (200 response, no redirect).
+- **Disabled filter**: `?disabled=1` filters the list to show only disabled (`no_crawl = 1`) feeds. A "Show disabled only" / "Clear filter" link toggles this view.
 - **Page actions**: includes an `Add Feed` link to `/feeds/add`
-- **Per feed**: external link to `html_url`, feed hostname (subordinate text), crawl status badge (`Crawling` or `Disabled`), detail link to `/feeds/{feedId}`, and an Enable/Disable toggle button.
+- **Per feed**: feed title (links to `/feeds/{feedId}` detail page), feed hostname (subordinate text), crawl status badge (`Crawling` or `Disabled`), `Visit Website` link to `html_url` (only shown when `html_url` is not null), and an Enable/Disable toggle button.
 - **Crawl toggle**: Submits `POST /api/feeds/{feedId}/toggle-crawl`. Uses POST-redirect-GET (303) so back/refresh does not re-POST.
 - **Add-feed banners**: after confirming a new feed, `/feeds` can show a success banner plus either an "initial crawl in progress", "initial crawl completed", or "initial crawl failed" message based on the matching `crawl_run_details` row.
 - **XSS protection**: All feed data HTML-escaped before rendering
+
+### Feed Detail (`/feeds/:feedId`)
+
+Protected. Displays metadata and recent activity for a single feed.
+
+- Returns **404** if the feed ID is not found.
+- **Feed metadata**: hostname, website URL (`html_url`), feed URL (`xml_url`), description (each shown only when not null).
+- **Admin metadata**: crawl status badge, consecutive failure count, last build date, score, created/updated timestamps.
+- **Recent crawl activity**: The last 5 crawl run detail rows for this feed, showing status, date, articles added, and any error message.
+- **Actions**: View Articles link to `/feeds/{feedId}/articles`, Visit Website link (when `html_url` is present), Back to Feeds link, and an Enable/Disable toggle button.
+- **List context preservation**: The detail page receives `listPage` and `disabled` query params from the feeds list so that Back to Feeds and the toggle returnTo both return the user to the correct list position and filter state.
 
 ### Add Feed (`/feeds/add`)
 
@@ -305,7 +330,7 @@ Protected. Flips the `no_crawl` flag for a feed:
 - Disabling: sets `no_crawl = 1`
 - Enabling: sets `no_crawl = 0` **and** resets `consecutive_failure_count = 0` (fresh start)
 
-Redirects to `/feeds` with 303 on success. Returns 404 if feed not found.
+Redirects to the `returnTo` form field value (defaulting to `/feeds`) with 303 on success. Returns 404 if feed not found.
 
 ### Logout (`/logout`)
 
@@ -413,7 +438,7 @@ Set via `npx wrangler secret put <NAME>`. **Never commit these to source control
 |---|---|
 | `GITHUB_CLIENT_ID` | GitHub OAuth App client ID |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret |
-| `ALLOWED_EMAILS` | Comma-separated list of permitted email addresses (e.g., `alice@example.com,bob@example.com`); whitespace around commas is ignored; matching is case-insensitive |
+| `ALLOWED_EMAILS` | Comma-separated list of permitted email addresses (e.g., `alice@example.com,bob@example.com`); whitespace around commas is ignored; matching is case-insensitive; only verified GitHub emails are checked |
 
 Secrets are read at request time. **Redeployment is not required after changing secrets.**
 
@@ -428,7 +453,7 @@ ALLOWED_EMAILS=you@example.com
 GITHUB_OAUTH_CALLBACK_URL=http://localhost:8787/auth/callback
 ```
 
-`GITHUB_OAUTH_CALLBACK_URL` must be set in `.dev.vars` for local OAuth to work; the value in `wrangler.jsonc` points to the production URL and will not match the local GitHub OAuth App.
+`GITHUB_OAUTH_CALLBACK_URL` must be set in `.dev.vars` for local OAuth to work; the value in `wrangler.jsonc` points to the production URL and will not match the local GitHub OAuth App. Wrangler loads `.dev.vars` automatically; its values override `wrangler.jsonc` vars during local development only and do not affect production.
 
 ---
 
@@ -633,7 +658,7 @@ await clearArticles();
 - `/auth/start` creates state token and redirects to GitHub
 - OAuth callback validates state, checks email, creates session
 - Session refresh throttle (no KV write within TTL/2 window)
-- Feeds page: pagination, empty state, XSS escaping, crawl status badges, toggle links
+- Feeds page: pagination, disabled filter, empty state, XSS escaping, crawl status badges, toggle links
 - Add-feed flow: URL validation, direct feed confirmation, website discovery, duplicate prevention, fallback direct-feed submission, and add-feed banners on `/feeds`
 - Articles page: pagination, date filtering, empty states, NULL published dates, XSS escaping
 - Crawl history: list page, detail page, 404 for unknown run
@@ -675,6 +700,12 @@ npx wrangler secret put ALLOWED_EMAILS
 # Enter: existing@example.com,newuser@example.com
 ```
 
+### Revoking Access
+
+Run `npx wrangler secret put ALLOWED_EMAILS` and omit the user's email from the new value. The change takes effect immediately for new login attempts. However, any active session for that user will continue until it expires (up to `SESSION_TTL_SECONDS` — 9 days by default).
+
+To immediately invalidate an active session, delete the session's KV key directly from the Cloudflare dashboard: navigate to **Workers & Pages → KV → SESSIONS namespace** and delete the key `session:{sessionId}`. The session ID is the value stored in the user's `feed_reader_session` cookie.
+
 ### Database Queries (Production)
 
 ```bash
@@ -714,6 +745,7 @@ feed-reader/
 │   ├── feed-discovery.js     # Add-feed URL validation, website scraping, and feed preview loading
 │   ├── feed-utils.js         # Shared URL normalization and hostname helpers
 │   ├── html-utils.js         # escapeHtml() utility
+│   ├── parser.js             # RSS/Atom XML parser (parseFeedXml, parseFeedPreview)
 │   ├── styles.css            # Stylesheet (imported as text, inlined into HTML)
 │   ├── auth/
 │   │   ├── middleware.js     # Auth middleware, public paths, session throttle
@@ -750,7 +782,8 @@ feed-reader/
 │   └── index.spec.js         # All test cases
 ├── plans/                    # Implementation plans (historical reference)
 ├── documentation/            # Additional topic documentation
-│   └── authentication.md     # Authentication system deep-dive
+│   ├── authentication.md     # Authentication system deep-dive
+│   └── add-feed.md           # Add-feed feature design rationale and tradeoffs
 ├── wrangler.jsonc            # Cloudflare Workers configuration
 ├── vitest.config.js          # Test configuration
 ├── package.json
@@ -765,12 +798,14 @@ feed-reader/
 | File | Responsibility |
 |---|---|
 | `src/index.js` | Mounts middleware and all routes; exports the Hono app and `scheduled` handler |
-| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeeds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed` |
+| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeeds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed` |
 | `src/crawl.js` | `performCrawl`, `performFeedCrawl` — scheduled and immediate crawl entry points sharing the same history/failure logic |
 | `src/feed-discovery.js` | Add-feed URL validation, website scraping, candidate discovery, and user-facing validation messages |
 | `src/feed-utils.js` | URL canonicalization, duplicate-comparison normalization, and hostname derivation |
+| `src/parser.js` | `parseFeedXml` (article extraction) and `parseFeedPreview` (feed-level metadata for the add-feed flow) |
 | `src/routes/add-feed.js` | Add-feed page renderer and hidden-state helpers for the SSR multi-step flow |
 | `src/routes/api/add-feed.js` | Server-side add-feed workflow, duplicate handling, feed creation, and immediate crawl scheduling |
+| `src/routes/feed-detail.js` | Feed detail page: metadata, admin info, recent crawl activity, and enable/disable toggle |
 | `src/auth/middleware.js` | Auth gate for all requests; session validation and throttled refresh |
 | `src/auth/session.js` | `createSession`, `getSession`, `refreshSession`, `deleteSession`, cookie helpers |
 | `src/auth/github.js` | `getAuthorizationUrl`, `exchangeCodeForToken`, `getUserEmails` |
@@ -794,3 +829,5 @@ feed-reader/
 | Crawl concurrency | Feeds are crawled sequentially (one at a time), not in parallel |
 | Article content | Only article metadata is stored (title, link, dates); full article body is not fetched or stored |
 | Add-feed state | The multi-step add-feed flow serializes discovered candidates into hidden form fields; very large candidate sets would increase HTML form size |
+| Website discovery | Feed discovery only checks `<link>` metadata and a short list of common feed paths; JavaScript-rendered sites are not supported |
+| Session revocation | Removing a user from `ALLOWED_EMAILS` stops new logins but does not invalidate active sessions; immediate revocation requires manually deleting the KV key from the Cloudflare dashboard |
