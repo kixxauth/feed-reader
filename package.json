@@ -19,8 +19,8 @@
 		"wrangler": "^4.76.0"
 	},
 	"dependencies": {
-		"fast-xml-parser": "^5.5.9",
 		"heat": "^0.0.5",
-		"hono": "^4.12.8"
+		"hono": "^4.12.8",
+		"sax": "^1.6.0"
 	}
 }

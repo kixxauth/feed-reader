@@ -45,6 +45,20 @@ To gather context, you'll need to explore this codebase. Be sure to review previ
 - Abstraction or architecture introduced before it is clearly needed
 - Requirements that solve for hypothetical future needs rather than the actual task
 
+**Format**
+The plan should begin with a brief Implementation Approach section (3–5 sentences) summarizing the overall strategy and any cross-cutting concerns across the stories.
+
+The rest of the document is a TODO list. Break each user story into discrete technical tasks — one task per file change, component, route, or logical unit of work. Each TODO item must follow this exact format:
+
+```
+- [ ] **<Short title>**
+  - **Story**: <User story ID or title>
+  - **What**: <What to build or change, in concrete terms>
+  - **Where**: <File path(s) or module(s) to create or modify>
+  - **Acceptance criteria**: <Which AC items this task satisfies>
+  - **Depends on**: <Item titles this must come after, or "none">
+```
+
 ## What to deliver
 
 1. A summary of the issues found, organized by category

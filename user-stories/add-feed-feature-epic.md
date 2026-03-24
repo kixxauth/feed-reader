@@ -243,7 +243,7 @@ Currently, users cannot add new RSS feeds directly from the UI. Feeds can only b
    - If 1 feed found: use it (proceed to step 5)
    - If multiple feeds found: show selection screen (user picks one, then proceed to step 5)
    - If 0 feeds found: show error with option to paste direct feed URL
-5. Parse feed with `fast-xml-parser` (already used in crawl.js)
+5. Parse feed with `parseFeedXml` from `src/parser.js`
 6. Extract title, description, feed type (RSS/Atom), and website URL (`html_url`)
 7. Check for duplicate by `xml_url`
 8. Display confirmation screen with extracted metadata
@@ -266,7 +266,7 @@ Currently, users cannot add new RSS feeds directly from the UI. Feeds can only b
 
 ### Immediate Crawl
 - After feed is saved to the database, trigger an immediate crawl of that feed asynchronously (does not block the HTTP response)
-- Crawl logic: Fetch feed from `xml_url`, parse with `fast-xml-parser`, extract articles, upsert them
+- Crawl logic: Fetch feed from `xml_url`, parse with `parseFeedXml` from `src/parser.js`, extract articles, upsert them
 - If crawl succeeds: articles are inserted and become visible in the feed
 - If crawl fails: record the failure reason; show warning message on the Feeds page; feed remains in database with `no_crawl = 0`
 - Feed will be retried at the next scheduled 2am crawl

@@ -33,7 +33,7 @@ A simple RSS feed reader built on Cloudflare Workers. This document describes th
 | Database | Cloudflare D1 (SQLite) |
 | Session store | Cloudflare KV |
 | Authentication | GitHub OAuth 2.0 |
-| Feed parsing | fast-xml-parser |
+| Feed parsing | sax |
 | Tests | Vitest + @cloudflare/vitest-pool-workers |
 | Dev tooling | Node.js, Wrangler CLI |
 
@@ -304,7 +304,7 @@ The crawl runs automatically once per day at **02:00 UTC** via a Cloudflare cron
 
 1. Fetches all feeds with `no_crawl = 0` from the database.
 2. For each feed, fetches the RSS/Atom XML from `xml_url` (30-second timeout, `FeedReader/1.0` user agent).
-3. Parses the XML using `fast-xml-parser`. Supports both **RSS 2.0** (`rss.channel.item`) and **Atom 1.0** (`feed.entry`).
+3. Parses the XML using the `sax` event-driven parser (`src/parser.js`). Supports both **RSS 2.0** and **Atom 1.0**.
 4. Extracts articles: derives a stable `id` as `{feedId}:{guid-or-link}`, normalizes title/link/published/updated.
 5. Upserts each article (INSERT ... ON CONFLICT DO NOTHING effectively — only `meta.changes` count as added).
 6. On success: resets `consecutive_failure_count` to 0.
