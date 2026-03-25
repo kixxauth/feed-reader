@@ -12,7 +12,8 @@
 
 import { renderLayout } from '../layout.js';
 import { getFeedById, getRecentActivityForFeed } from '../db.js';
-import { escapeHtml } from '../html-utils.js';
+import { notFoundPage } from '../views/partials.js';
+import { feedDetailPage } from '../views/pages/feed-detail.js';
 
 export async function handleFeedDetail(c) {
 	const feedId = c.req.param('feedId');
@@ -23,7 +24,7 @@ export async function handleFeedDetail(c) {
 		return c.html(
 			renderLayout({
 				title: 'Not Found — Feed Reader',
-				content: '<main><h1>Not Found</h1><p>Feed not found.</p></main>',
+				content: notFoundPage('Feed not found.'),
 				isAuthenticated: true,
 				currentPath: c.req.path,
 			}),
@@ -56,115 +57,17 @@ export async function handleFeedDetail(c) {
 	// Build context params for "View Articles" link (same query string as selfHref)
 	const contextParams = selfParts.length > 0 ? `?${selfParts.join('&')}` : '';
 
-	// Crawl badge and toggle label
-	const noCrawl = feed.no_crawl;
-	const crawlBadge = noCrawl
-		? `<span class="crawl-status-badge crawl-status-disabled">Disabled</span>`
-		: `<span class="crawl-status-badge crawl-status-enabled">Crawling</span>`;
-	const toggleLabel = noCrawl ? 'Enable' : 'Disable';
-
-	// Featured badge and toggle label
-	const isFeatured = feed.featured === 1;
-	const featuredBadge = isFeatured
-		? `<span class="featured-badge">Featured</span>`
-		: '';
-	const featuredToggleLabel = isFeatured ? 'Unfeature' : 'Feature';
-
-	// Format a date value for display
-	function formatDate(value) {
-		return new Date(value).toLocaleDateString('en-US', {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric',
-			timeZone: 'UTC',
-		});
-	}
-
-	// Feed meta rows (conditional)
-	const htmlUrlRow = feed.html_url
-		? `\n    <div class="feed-meta-row"><span class="feed-meta-label">Website:</span> <a href="${escapeHtml(feed.html_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(feed.html_url)}</a></div>`
-		: '';
-	const xmlUrlRow = feed.xml_url
-		? `\n    <div class="feed-meta-row"><span class="feed-meta-label">Feed URL:</span> <a href="${escapeHtml(feed.xml_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(feed.xml_url)}</a></div>`
-		: '';
-	const descriptionRow = feed.description
-		? `\n    <div class="feed-meta-row"><span class="feed-meta-label">Description:</span> <span>${escapeHtml(feed.description)}</span></div>`
-		: '';
-
-	// Admin meta values
-	const lastBuildDate = feed.last_build_date ? formatDate(feed.last_build_date) : 'Unknown';
-	const score = feed.score != null ? escapeHtml(feed.score) : 'None';
-	const createdAt = formatDate(feed.created_at);
-	const updatedAt = formatDate(feed.updated_at);
-
-	// Recent activity list
-	let activityHtml;
-	if (!recentActivity || recentActivity.length === 0) {
-		activityHtml = '<p>No crawl activity recorded.</p>';
-	} else {
-		const items = recentActivity
-			.map((item) => {
-				const statusClass = escapeHtml(`status-${item.status}`);
-				const statusLabel = escapeHtml(item.status);
-				const startedAt = formatDate(item.started_at);
-				const articlesAdded = escapeHtml(item.articles_added);
-				const errorHtml = item.error_message
-					? `\n      <span>${escapeHtml(item.error_message)}</span>`
-					: '';
-				return `<li class="recent-activity-item">
-      <span class="${statusClass}">${statusLabel}</span>
-      <span>${startedAt}</span>
-      <span>${articlesAdded} added</span>${errorHtml}
-    </li>`;
-			})
-			.join('\n');
-		activityHtml = `<ul class="recent-activity-list">
-    ${items}
-  </ul>`;
-	}
-
-	// "Visit Website" action link (conditional)
-	const visitWebsiteLink = feed.html_url
-		? `\n    <a href="${escapeHtml(feed.html_url)}" target="_blank" rel="noopener noreferrer">Visit Website</a>`
-		: '';
-
-	const content = `<main class="feed-detail">
-  <h1>${escapeHtml(feed.title)}${featuredBadge ? ` ${featuredBadge}` : ''}</h1>
-
-  <section class="feed-meta">
-    <div class="feed-meta-row"><span class="feed-meta-label">Hostname:</span> <span>${escapeHtml(feed.hostname)}</span></div>${htmlUrlRow}${xmlUrlRow}${descriptionRow}
-  </section>
-
-  <section class="feed-admin-meta">
-    <div class="feed-meta-row"><span class="feed-meta-label">Crawl status:</span> ${crawlBadge}</div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Consecutive failures:</span> <span>${escapeHtml(feed.consecutive_failure_count)}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Last build date:</span> <span>${lastBuildDate}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Score:</span> <span>${score}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Created:</span> <span>${createdAt}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Updated:</span> <span>${updatedAt}</span></div>
-  </section>
-
-  <h2>Recent Activity</h2>
-  ${activityHtml}
-
-  <div class="feed-actions">
-    <a href="/feeds/${escapeHtml(feedId)}/articles${escapeHtml(contextParams)}">View Articles</a>${visitWebsiteLink}
-    <a href="${escapeHtml(listHref)}">Back to Feeds</a>
-    <form method="POST" action="/api/feeds/${escapeHtml(feedId)}/toggle-crawl" class="toggle-crawl-form">
-      <input type="hidden" name="returnTo" value="${escapeHtml(selfHref)}">
-      <button type="submit">${toggleLabel}</button>
-    </form>
-    <form method="POST" action="/api/feeds/${escapeHtml(feedId)}/toggle-featured" class="toggle-featured-form">
-      <input type="hidden" name="returnTo" value="${escapeHtml(selfHref)}">
-      <button type="submit">${featuredToggleLabel}</button>
-    </form>
-  </div>
-</main>`;
-
 	return c.html(
 		renderLayout({
-			title: `${escapeHtml(feed.title)} — Feed Reader`,
-			content,
+			title: `${feed.title} — Feed Reader`,
+			content: feedDetailPage({
+				feed,
+				recentActivity,
+				feedId,
+				listHref,
+				selfHref,
+				contextParams,
+			}),
 			isAuthenticated: true,
 			currentPath: c.req.path,
 		})

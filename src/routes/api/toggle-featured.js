@@ -14,6 +14,7 @@
  */
 
 import { renderLayout } from '../../layout.js';
+import { notFoundPage } from '../../views/partials.js';
 import { getFeedById, updateFeedFeatured } from '../../db.js';
 
 export async function handleToggleFeatured(c) {
@@ -24,7 +25,7 @@ export async function handleToggleFeatured(c) {
 		return c.html(
 			renderLayout({
 				title: 'Not Found — Feed Reader',
-				content: '<main><h1>Not Found</h1><p>Feed not found.</p></main>',
+				content: notFoundPage('Feed not found.'),
 				isAuthenticated: true,
 				currentPath: c.req.path,
 			}),

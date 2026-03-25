@@ -212,6 +212,16 @@ describe('Authenticated access', () => {
 		expect(body).toContain('href="/feeds"');
 		expect(body).not.toContain('<ul class="feed-list">');
 	});
+
+	it('GET / returns 200 with "Feed Reader" heading', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('<h1>Feed Reader</h1>');
+	});
 });
 
 describe('Feeds page', () => {
@@ -223,6 +233,29 @@ describe('Feeds page', () => {
 		const response = await SELF.fetch('http://example.com/feeds', { redirect: 'manual' });
 		expect(response.status).toBe(302);
 		expect(response.headers.get('location')).toBe('/login?next=%2Ffeeds');
+	});
+
+	it('GET /feeds returns 200 with "Feeds" heading', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('<h1>Feeds</h1>');
+	});
+
+	it('GET /feeds shows disabled filter link', async () => {
+		await seedFeeds([
+			{ id: 'feed-1', hostname: 'alpha.example.com', title: 'Alpha Feed', html_url: 'https://alpha.example.com' },
+		]);
+		const request = await makeAuthenticatedRequest('http://example.com/feeds');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('href="/feeds?disabled=1"');
 	});
 
 	it('GET /feeds with valid session and no feeds shows "No feeds available"', async () => {
@@ -399,6 +432,67 @@ describe('Feeds page', () => {
 		const body = await response.text();
 		expect(body).toContain('href="/feeds/feed-1"');
 		expect(body).toContain('href="/feeds/feed-2"');
+	});
+});
+
+describe('Add feed page', () => {
+	it('GET /feeds/add returns 200 with the URL form', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/add');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('<h1>Add Feed</h1>');
+		expect(body).toContain('action="/api/feeds/add"');
+		expect(body).toContain('name="url"');
+	});
+
+	it('POST add-feed with invalid URL returns error notice', async () => {
+		vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+			Object.assign(new Error('invalid url'), { name: 'TypeError' })
+		);
+
+		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+		const response = await SELF.fetch('http://example.com/api/feeds/add', {
+			method: 'POST',
+			headers: {
+				Cookie: `feed_reader_session=${sessionId}`,
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
+			body: 'intent=submit&url=not-a-valid-url',
+		});
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('notice-error');
+	});
+});
+
+describe('Feed detail page', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+	});
+
+	it('GET /feeds/:feedId returns 200 with feed title for a seeded feed', async () => {
+		await seedFeeds([
+			{ id: 'feed-detail-1', hostname: 'example.com', title: 'My Detail Feed', html_url: 'https://example.com' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-detail-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('My Detail Feed');
+	});
+
+	it('GET /feeds/:feedId returns 404 for nonexistent feed', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/nonexistent-feed');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(404);
 	});
 });
 
@@ -1334,6 +1428,25 @@ describe('Feed discovery', () => {
 		await expect(previewDirectFeedUrl('https://example.com/feed.xml')).rejects.toMatchObject({
 			message: ADD_FEED_MESSAGES.timeout,
 		});
+	});
+});
+
+describe('Reader page', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+		await clearArticles();
+	});
+
+	it('GET /reader returns 200 with the date heading', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-03-25');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('class="reader-heading"');
+		// The heading should contain "March 25, 2026" (the display date for 2026-03-25)
+		expect(body).toContain('March 25, 2026');
 	});
 });
 

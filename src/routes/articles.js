@@ -18,8 +18,9 @@
 
 import { renderLayout } from '../layout.js';
 import { getFeedById, getArticlesByFeedPaginated, ARTICLES_PAGE_SIZE } from '../db.js';
-import { escapeHtml } from '../html-utils.js';
 import { resolveArticleUrl } from '../feed-utils.js';
+import { notFoundPage } from '../views/partials.js';
+import { articlesPage } from '../views/pages/articles.js';
 
 const DATE_PARAM_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -32,7 +33,7 @@ export async function handleArticles(c) {
 		return c.html(
 			renderLayout({
 				title: 'Not Found — Feed Reader',
-				content: '<main><h1>Not Found</h1><p>Feed not found.</p></main>',
+				content: notFoundPage('Feed not found.'),
 				isAuthenticated: true,
 				currentPath: c.req.path,
 			}),
@@ -83,108 +84,35 @@ export async function handleArticles(c) {
 	if (listDisabled) listParams.push('disabled=1');
 	const backToFeedsHref = listParams.length > 0 ? `/feeds?${listParams.join('&')}` : '/feeds';
 
-	let content;
+	// Build filter query string for pagination links (preserves active filters)
+	const filterParts = [];
+	if (fromDate !== null) filterParts.push(`from=${encodeURIComponent(fromDate)}`);
+	if (toDate !== null) filterParts.push(`to=${encodeURIComponent(toDate)}`);
+	if (listPage > 1) filterParts.push(`listPage=${listPage}`);
+	if (listDisabled) filterParts.push('disabled=1');
+	const filterQs = filterParts.join('&');
 
-	if (total === 0 && !filtersActive) {
-		// Empty state: no articles at all for this feed
-		content = `<main>
-  <h1>${escapeHtml(feed.title)}</h1>
-  <a href="${backToFeedsHref}">Back to Feeds</a>
-  <p>No articles available for this feed</p>
-</main>`;
-	} else if (total === 0 && filtersActive) {
-		// Empty state: filters active but no matches — show filter form so user can clear
-		const filterForm = buildFilterForm(feedId, fromDate, toDate);
-		content = `<main>
-  <h1>${escapeHtml(feed.title)}</h1>
-  <a href="${backToFeedsHref}">Back to Feeds</a>
-  ${filterForm}
-  <p>No articles match the current filter</p>
-</main>`;
-	} else {
-		// Articles found — show filter form, article list, and pagination
-		const filterForm = buildFilterForm(feedId, fromDate, toDate);
-		const feedBaseUrl = feed.html_url || feed.xml_url;
-
-		const items = articles
-			.map((article) => {
-				const resolvedLink = resolveArticleUrl(article.link, feedBaseUrl);
-				const titleHtml = resolvedLink
-					? `<a href="${escapeHtml(resolvedLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.title)}</a>`
-					: `<span class="article-title">${escapeHtml(article.title)}</span>`;
-
-				const formattedDate = article.published
-					? new Date(article.published).toLocaleDateString('en-US', {
-							year: 'numeric',
-							month: 'short',
-							day: 'numeric',
-							timeZone: 'UTC',
-						})
-					: 'Date unknown';
-
-				return `<li class="article-item">
-    ${titleHtml}
-    <span class="article-date">${formattedDate}</span>
-  </li>`;
-			})
-			.join('\n');
-
-		// Build filter query string for pagination links (preserves active filters)
-		const filterParts = [];
-		if (fromDate !== null) filterParts.push(`from=${encodeURIComponent(fromDate)}`);
-		if (toDate !== null) filterParts.push(`to=${encodeURIComponent(toDate)}`);
-		if (listPage > 1) filterParts.push(`listPage=${listPage}`);
-		if (listDisabled) filterParts.push('disabled=1');
-		const filterQs = filterParts.join('&');
-
-		const prevLink =
-			page === 1
-				? `<a aria-disabled="true">Previous</a>`
-				: `<a href="/feeds/${feedId}/articles?${filterQs ? filterQs + '&' : ''}page=${page - 1}">Previous</a>`;
-
-		const nextLink =
-			page === totalPages
-				? `<a aria-disabled="true">Next</a>`
-				: `<a href="/feeds/${feedId}/articles?${filterQs ? filterQs + '&' : ''}page=${page + 1}">Next</a>`;
-
-		content = `<main>
-  <h1>${escapeHtml(feed.title)}</h1>
-  <a href="${backToFeedsHref}">Back to Feeds</a>
-  ${filterForm}
-  <ul class="article-list">
-${items}
-  </ul>
-  <nav class="pagination">
-    ${prevLink}
-    <span>Page ${page} of ${totalPages}</span>
-    ${nextLink}
-  </nav>
-</main>`;
-	}
+	const feedBaseUrl = feed.html_url || feed.xml_url;
 
 	return c.html(
 		renderLayout({
-			title: `${escapeHtml(feed.title)} Articles — Feed Reader`,
-			content,
+			title: `${feed.title} Articles — Feed Reader`,
+			content: articlesPage({
+				feed,
+				articles,
+				total,
+				page,
+				totalPages,
+				fromDate,
+				toDate,
+				filtersActive,
+				feedId,
+				feedBaseUrl,
+				backToFeedsHref,
+				filterQs,
+			}, resolveArticleUrl),
 			isAuthenticated: true,
 			currentPath: c.req.path,
 		})
 	);
-}
-
-/**
- * Build the date filter form HTML.
- *
- * @param {string} feedId
- * @param {string|null} fromDate
- * @param {string|null} toDate
- * @returns {string}
- */
-function buildFilterForm(feedId, fromDate, toDate) {
-	return `<form method="GET" class="filter-form">
-    <input type="date" name="from" value="${fromDate ?? ''}">
-    <input type="date" name="to" value="${toDate ?? ''}">
-    <button type="submit">Filter</button>
-    <a href="/feeds/${escapeHtml(feedId)}/articles">Clear</a>
-  </form>`;
 }

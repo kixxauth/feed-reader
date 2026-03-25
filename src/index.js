@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { renderLayout } from './layout.js';
+import { homePage } from './views/pages/home.js';
 import { authMiddleware } from './auth/middleware.js';
 import { handleLogin } from './routes/login.js';
 import { handleAuthStart } from './routes/auth-start.js';
@@ -42,15 +43,10 @@ app.get('/crawl-history/:crawlRunId', handleCrawlHistoryDetail);
 app.get('/reader', handleReader);
 
 app.get('/', (c) => {
-	const content = `<main>
-  <h1>Feed Reader</h1>
-  <a href="/feeds">Feeds</a>
-</main>`;
-
 	return c.html(
 		renderLayout({
 			title: 'Feed Reader',
-			content,
+			content: homePage(),
 			isAuthenticated: true,
 			currentPath: c.req.path,
 		})

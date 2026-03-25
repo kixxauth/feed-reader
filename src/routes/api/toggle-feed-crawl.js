@@ -16,6 +16,7 @@
  */
 
 import { renderLayout } from '../../layout.js';
+import { notFoundPage } from '../../views/partials.js';
 import { getFeedById, updateFeedCrawlStatus, resetFeedFailureCount } from '../../db.js';
 
 export async function handleToggleFeedCrawl(c) {
@@ -27,7 +28,7 @@ export async function handleToggleFeedCrawl(c) {
 		return c.html(
 			renderLayout({
 				title: 'Not Found — Feed Reader',
-				content: '<main><h1>Not Found</h1><p>Feed not found.</p></main>',
+				content: notFoundPage('Feed not found.'),
 				isAuthenticated: true,
 				currentPath: c.req.path,
 			}),

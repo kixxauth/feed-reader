@@ -20,7 +20,7 @@
 
 import { renderLayout } from '../layout.js';
 import { getCrawlRunDetailByFeed, getFeedsPaginated, PAGE_SIZE } from '../db.js';
-import { escapeHtml } from '../html-utils.js';
+import { feedsPage, addFeedBanner } from '../views/pages/feeds.js';
 
 export async function handleFeeds(c) {
 	const rawPage = parseInt(c.req.query('page'), 10);
@@ -38,124 +38,27 @@ export async function handleFeeds(c) {
 		({ feeds } = await getFeedsPaginated(c.env.DB, page, { disabledOnly: disabled }));
 	}
 
-	const disabledParam = disabled ? '?disabled=1' : '';
-	const addFeedButton = `<p class="page-actions"><a class="button-link" href="/feeds/add">Add Feed</a></p>`;
-	const bannerHtml = addedFeedId && crawlRunId
-		? await buildAddFeedBanner(c.env.DB, addedFeedId, crawlRunId)
-		: '';
-
-	let content;
-	if (total === 0) {
-		const emptyMessage = disabled
-			? `<p>No disabled feeds. <a href="/feeds">Clear filter</a></p>`
-			: `<p>No feeds available</p>`;
-		content = `<main>
-  <h1>Feeds</h1>
-  ${bannerHtml}
-  ${addFeedButton}
-  ${emptyMessage}
-</main>`;
+	let bannerHtml;
+	if (addedFeedId && crawlRunId) {
+		const detail = await getCrawlRunDetailByFeed(c.env.DB, crawlRunId, addedFeedId);
+		bannerHtml = addFeedBanner(detail);
 	} else {
-		const filterControl = disabled
-			? `<p class="feed-filter">Showing disabled feeds only — <a href="/feeds">Clear filter</a></p>`
-			: `<p class="feed-filter"><a href="/feeds?disabled=1">Show disabled only</a></p>`;
-
-		const items = feeds
-			.map((feed) => {
-				const title = escapeHtml(feed.title);
-				const hostname = escapeHtml(feed.hostname);
-				const feedId = escapeHtml(feed.id);
-				const noCrawl = feed.no_crawl;
-				const crawlBadge = noCrawl
-					? `<span class="crawl-status-badge crawl-status-disabled">Disabled</span>`
-					: `<span class="crawl-status-badge crawl-status-enabled">Crawling</span>`;
-				const toggleButtonLabel = noCrawl ? 'Enable' : 'Disable';
-
-				// Build detail href with optional listPage and disabled params
-				let detailHref = `/feeds/${feedId}`;
-				if (page > 1 && disabled) {
-					detailHref += `?listPage=${page}&disabled=1`;
-				} else if (page > 1) {
-					detailHref += `?listPage=${page}`;
-				} else if (disabled) {
-					detailHref += `?disabled=1`;
-				}
-
-				// Visit Website link — only when html_url is not null
-				const visitWebsiteLink =
-					feed.html_url
-						? `<a href="${escapeHtml(feed.html_url)}" target="_blank" rel="noopener noreferrer">Visit Website</a>`
-						: '';
-
-				return `<li class="feed-item">
-    <a href="${detailHref}">${title}</a>
-    <span class="feed-hostname">${hostname}</span>
-    ${crawlBadge}
-    ${visitWebsiteLink}
-    <form method="POST" action="/api/feeds/${feedId}/toggle-crawl" class="toggle-crawl-form">
-      <input type="hidden" name="returnTo" value="/feeds${disabledParam}">
-      <button type="submit">${toggleButtonLabel}</button>
-    </form>
-  </li>`;
-			})
-			.join('\n');
-
-		let prevLink;
-		if (page === 1) {
-			prevLink = `<a aria-disabled="true">Previous</a>`;
-		} else if (disabled) {
-			prevLink = `<a href="/feeds?disabled=1&page=${page - 1}">Previous</a>`;
-		} else {
-			prevLink = `<a href="/feeds?page=${page - 1}">Previous</a>`;
-		}
-
-		let nextLink;
-		if (page === totalPages) {
-			nextLink = `<a aria-disabled="true">Next</a>`;
-		} else if (disabled) {
-			nextLink = `<a href="/feeds?disabled=1&page=${page + 1}">Next</a>`;
-		} else {
-			nextLink = `<a href="/feeds?page=${page + 1}">Next</a>`;
-		}
-
-		content = `<main>
-  <h1>Feeds</h1>
-  ${bannerHtml}
-  ${addFeedButton}
-  ${filterControl}
-  <ul class="feed-list">
-${items}
-  </ul>
-  <nav class="pagination">
-    ${prevLink}
-    <span>Page ${page} of ${totalPages}</span>
-    ${nextLink}
-  </nav>
-</main>`;
+		bannerHtml = null;
 	}
 
 	return c.html(
 		renderLayout({
 			title: 'Feeds — Feed Reader',
-			content,
+			content: feedsPage({
+				feeds,
+				total,
+				page,
+				totalPages,
+				disabled,
+				bannerHtml,
+			}),
 			isAuthenticated: true,
 			currentPath: c.req.path,
 		})
 	);
-}
-
-async function buildAddFeedBanner(db, feedId, crawlRunId) {
-	const detail = await getCrawlRunDetailByFeed(db, crawlRunId, feedId);
-
-	const successHtml = '<div class="notice notice-success">Feed added successfully.</div>';
-	if (!detail) {
-		return `${successHtml}\n  <div class="notice notice-info">Feed added. Initial crawl in progress.</div>`;
-	}
-
-	if (detail.status === 'failed' || detail.status === 'auto_disabled') {
-		const reason = detail.error_message || 'Unknown error';
-		return `${successHtml}\n  <div class="notice notice-warning">Feed added, but could not fetch articles yet. Reason: ${escapeHtml(reason)}. Articles will be fetched at the next scheduled crawl (2am UTC).</div>`;
-	}
-
-	return `${successHtml}\n  <div class="notice notice-info">Feed added. Initial crawl completed.</div>`;
 }

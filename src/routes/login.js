@@ -1,4 +1,5 @@
 import { renderLayout } from '../layout.js';
+import { loginPage } from '../views/pages/login.js';
 
 // Hono route handler for GET /login.
 export async function handleLogin(c) {
@@ -6,15 +7,10 @@ export async function handleLogin(c) {
 
 	const authStartUrl = `/auth/start?next=${encodeURIComponent(nextUrl)}`;
 
-	const content = `<main>
-  <h1>Login</h1>
-  <p><a href="${authStartUrl}">Login with GitHub</a></p>
-</main>`;
-
 	return c.html(
 		renderLayout({
 			title: 'Feed Reader — Login',
-			content,
+			content: loginPage(authStartUrl),
 			isAuthenticated: false,
 		})
 	);

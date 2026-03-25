@@ -17,7 +17,6 @@
 
 import { renderLayout } from '../layout.js';
 import { getDailyReaderArticles } from '../db.js';
-import { escapeHtml } from '../html-utils.js';
 import { resolveArticleUrl } from '../feed-utils.js';
 import {
 	parseSelectedDate,
@@ -26,6 +25,7 @@ import {
 	formatDateForDisplay,
 	getTodayUtc,
 } from '../reader-utils.js';
+import { readerPage } from '../views/pages/reader.js';
 
 export async function handleReader(c) {
 	const rawDate = c.req.query('date');
@@ -69,87 +69,18 @@ export async function handleReader(c) {
 	const displayDate = formatDateForDisplay(selectedDate);
 	const todayUtc = getTodayUtc();
 
-	const dateControls = `<div class="reader-date-controls">
-  <a href="/reader?date=${escapeHtml(prevDate)}" class="button-link">Previous</a>
-  <form method="GET" action="/reader">
-    <input type="date" name="date" value="${escapeHtml(selectedDate)}" max="${escapeHtml(todayUtc)}">
-    <button type="submit">Go</button>
-  </form>
-  <a href="/reader?date=${escapeHtml(nextDate)}" class="button-link">Next</a>
-</div>`;
-
-	function renderFeedGroup(group, extraClass) {
-		const articleCount = group.articles.length;
-		const sectionClass = extraClass
-			? `reader-feed-group ${extraClass}`
-			: 'reader-feed-group';
-
-		const articlesHtml = group.articles
-			.map((article) => {
-				const effectiveDateStr = article.article_published || article.article_added;
-				const formattedDate = effectiveDateStr
-					? new Date(effectiveDateStr).toLocaleDateString('en-US', {
-							year: 'numeric',
-							month: 'short',
-							day: 'numeric',
-							timeZone: 'UTC',
-						})
-					: 'Date unknown';
-
-				const resolvedLink = resolveArticleUrl(article.article_link, group.feedBaseUrl);
-				const titleHtml = resolvedLink
-					? `<a href="${escapeHtml(resolvedLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.article_title ?? '(no title)')}</a>`
-					: `<span>${escapeHtml(article.article_title ?? '(no title)')}</span>`;
-
-				return `<li class="article-item">
-        ${titleHtml}
-        <span class="article-date">${formattedDate}</span>
-      </li>`;
-			})
-			.join('\n');
-
-		return `<section class="${sectionClass}">
-  <h2 class="reader-feed-group-header"><a href="/feeds/${escapeHtml(group.feedId)}">${escapeHtml(group.feedTitle)}</a> <span class="reader-article-count">(${articleCount})</span></h2>
-  <ul class="reader-article-list article-list">
-${articlesHtml}
-  </ul>
-</section>`;
-	}
-
-	let bodyContent;
-	const hasAny = featuredGroups.length > 0 || regularGroups.length > 0;
-
-	if (!hasAny) {
-		bodyContent = `<p class="reader-empty-state">No articles found for this date.</p>`;
-	} else {
-		let featuredHtml = '';
-		if (featuredGroups.length > 0) {
-			const inner = featuredGroups
-				.map((g) => renderFeedGroup(g, 'reader-feed-group-featured'))
-				.join('\n');
-			featuredHtml = `<div class="reader-featured">
-  <h2 class="reader-featured-heading">Featured</h2>
-${inner}
-</div>`;
-		}
-
-		const regularHtml = regularGroups
-			.map((g) => renderFeedGroup(g))
-			.join('\n');
-
-		bodyContent = featuredHtml + regularHtml;
-	}
-
-	const content = `<main>
-  <h1 class="reader-heading">${escapeHtml(displayDate)}</h1>
-  ${dateControls}
-  ${bodyContent}
-</main>`;
-
 	return c.html(
 		renderLayout({
-			title: `Reader — ${escapeHtml(displayDate)}`,
-			content,
+			title: `Reader — ${displayDate}`,
+			content: readerPage({
+				featuredGroups,
+				regularGroups,
+				selectedDate,
+				prevDate,
+				nextDate,
+				displayDate,
+				todayUtc,
+			}, resolveArticleUrl),
 			isAuthenticated: true,
 			currentPath: c.req.path,
 		})

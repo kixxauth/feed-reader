@@ -1,3 +1,4 @@
+import { html } from 'hono/html';
 import { renderLayout } from '../layout.js';
 import { consumeState } from '../auth/state.js';
 import { exchangeCodeForToken, getUserEmails } from '../auth/github.js';
@@ -68,7 +69,7 @@ export async function handleCallback(c) {
 		.find((e) => allowList.includes(e));
 
 	if (!matchedEmail) {
-		const content = `<main>
+		const content = html`<main>
   <h1>Access Denied</h1>
   <p>You do not have permission to access this site.</p>
 </main>`;

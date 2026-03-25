@@ -1,3 +1,4 @@
+import { html, raw } from 'hono/html';
 import styles from './styles.css';
 
 /**
@@ -24,25 +25,25 @@ function getActiveSection(currentPath) {
 }
 
 export function renderLayout({ title, content, isAuthenticated = false, currentPath }) {
-	let nav = '';
+	let nav = html``;
 
 	if (isAuthenticated) {
 		const activeSection = getActiveSection(currentPath);
 
 		const homeAttrs = activeSection === 'home'
-			? ' class="nav-link-active" aria-current="page"'
-			: '';
+			? raw(' class="nav-link-active" aria-current="page"')
+			: raw('');
 		const feedsAttrs = activeSection === 'feeds'
-			? ' class="nav-link-active" aria-current="page"'
-			: '';
+			? raw(' class="nav-link-active" aria-current="page"')
+			: raw('');
 		const crawlAttrs = activeSection === 'crawl-history'
-			? ' class="nav-link-active" aria-current="page"'
-			: '';
+			? raw(' class="nav-link-active" aria-current="page"')
+			: raw('');
 		const readerAttrs = activeSection === 'reader'
-			? ' class="nav-link-active" aria-current="page"'
-			: '';
+			? raw(' class="nav-link-active" aria-current="page"')
+			: raw('');
 
-		nav = `<header>
+		nav = html`<header>
     <nav aria-label="Primary">
         <a href="/"${homeAttrs}>Home</a>
         <a href="/feeds"${feedsAttrs}>Feeds List</a>
@@ -55,13 +56,16 @@ export function renderLayout({ title, content, isAuthenticated = false, currentP
 </header>`;
 	}
 
-	return `<!DOCTYPE html>
+	// title is interpolated directly — the html tag auto-escapes plain strings.
+	// content is an HtmlEscapedString from a view function (html tag) — nesting
+	// HtmlEscapedString values does not double-escape them.
+	return html`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${title}</title>
-    <style>${styles}</style>
+    <style>${raw(styles)}</style>
 </head>
 <body>
     ${nav}
