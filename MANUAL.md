@@ -588,43 +588,6 @@ npx wrangler d1 execute feed-reader-db --remote --command "SELECT COUNT(*) FROM 
 
 ## 9. Importing Data
 
-Both import scripts read from a source SQLite database file and upsert rows into D1. They are **idempotent**: re-running with the same source updates existing records without creating duplicates.
-
-### Import Feeds
-
-```bash
-# Local
-npm run import-feeds -- --env local path/to/source.sqlite
-
-# Production
-npm run import-feeds -- --env remote path/to/source.sqlite
-
-# Override table name (if auto-detection fails)
-npm run import-feeds -- --env local --table my_table path/to/source.sqlite
-```
-
-**Auto-detection**: Looks for a table with columns `id`, `hostname`, `title`, `xml_url`, `html_url`.
-
-**Required source columns**: `id`, `hostname`, `type`, `title`, `xml_url`, `html_url`, `no_crawl`, `description`, `last_build_date`, `score`
-
-**Duplicate prevention**: Before import, the script normalizes `xml_url` the same way as the Worker (`HTTP/HTTPS` canonicalization plus case-insensitive compare) and aborts if the source data contains duplicate feed URLs. Remote/local D1 inserts also rely on the normalized unique index added by migration `0006`.
-
-### Import Articles
-
-```bash
-# Local
-npm run import-articles -- --env local path/to/source.sqlite
-
-# Production
-npm run import-articles -- --env remote path/to/source.sqlite
-```
-
-**Auto-detection**: Looks for a table with columns `id`, `feed_id`, `link`, `title`, `published`.
-
-**Required source columns**: `id`, `feed_id`, `link`, `title`, `published`, `updated`, `added`
-
-**Critical**: The `published` column in the source **must be ISO 8601 text** (`YYYY-MM-DD` or `YYYY-MM-DDThh:mm:ssZ`). Date filtering depends on lexicographic string comparison. Unix timestamps or other formats will produce incorrect filtering results and must be converted before import.
-
 ### Recover Failed Feeds
 
 `scripts/recover-failed-feeds.js` is a maintenance script for recovering feeds that have been failing to crawl, typically because a feed moved to a new URL. For each feed that failed in the most recent crawl run, it:
