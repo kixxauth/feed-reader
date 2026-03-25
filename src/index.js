@@ -15,7 +15,7 @@ import { handleToggleFeedCrawl } from './routes/api/toggle-feed-crawl.js';
 import { handleToggleFeatured } from './routes/api/toggle-featured.js';
 import { handleCrawlHistory, handleCrawlHistoryDetail } from './routes/crawl-history.js';
 import { handleReader } from './routes/reader.js';
-import { performCrawl } from './crawl.js';
+import { dispatchCrawl, processCrawlBatch } from './crawl.js';
 
 const app = new Hono();
 
@@ -61,9 +61,28 @@ export default {
 	fetch: app.fetch,
 	async scheduled(controller, env, ctx) {
 		ctx.waitUntil(
-			performCrawl(env.DB)
-				.then((summary) => console.log('Crawl completed:', JSON.stringify(summary)))
-				.catch((err) => console.error('Crawl failed:', err))
+			dispatchCrawl(env.DB, env.CRAWL_QUEUE)
+				.then((summary) =>
+					console.log(
+						`Crawl dispatched: ${summary.batchCount} batch(es) for ${summary.totalFeeds} feeds (crawlRunId=${summary.crawlRunId})`
+					)
+				)
+				.catch((err) => console.error('Crawl dispatch failed:', err))
 		);
+	},
+	async queue(batch, env) {
+		for (const message of batch.messages) {
+			const { crawlRunId, feedIds } = message.body;
+			try {
+				const summary = await processCrawlBatch(env.DB, message.body);
+				console.log('Crawl batch processed:', JSON.stringify(summary));
+				message.ack();
+			} catch (err) {
+				// Log before letting the error propagate — the queue will retry the
+				// unacknowledged message up to max_retries times.
+				console.error(`Crawl batch failed (crawlRunId=${crawlRunId}, feedCount=${feedIds?.length}):`, err);
+				throw err;
+			}
+		}
 	},
 };

@@ -13,11 +13,12 @@
  *   getArticlesByFeedPaginated — returns paginated articles for a feed with optional date filtering
  *   createFeed                 — inserts a single feed row for UI-driven feed creation
  *   upsertFeed                 — insert-or-update a single feed row (used by future admin endpoints)
- *   getEnabledFeeds            — returns all feeds where no_crawl = 0 (used by crawl module)
+ *   getEnabledFeedIds          — returns only feed IDs where no_crawl = 0 (used by dispatcher)
+ *   getFeedsByIds              — returns full feed rows for an array of IDs (used by queue consumer)
  *   getCrawlRuns               — returns the most recent N crawl runs (for history page)
  *   getCrawlRunById            — returns a single crawl run by id, or null if not found
  *   getCrawlRunDetails         — returns all crawl_run_details rows for a crawl, joined with feeds
- *   recordCrawlRun             — inserts a new crawl_runs row at crawl completion
+ *   recordCrawlRun             — inserts a new crawl_runs row at crawl start (id and started_at only)
  *   recordCrawlRunDetail       — inserts a row into crawl_run_details
  *   updateFeedFailureCount     — sets consecutive_failure_count for a feed
  *   disableFeed                — sets no_crawl = 1 and consecutive_failure_count = 0 for a feed
@@ -245,41 +246,90 @@ export async function upsertFeed(db, feedData) {
 }
 
 /**
- * Return all feeds where no_crawl = 0 (crawl-enabled feeds).
- * The crawl module needs at minimum id, xml_url, and consecutive_failure_count.
+ * Return only the IDs of all crawl-enabled feeds (no_crawl = 0).
+ * Used by the dispatcher to build queue messages without fetching full feed rows.
  *
  * @param {D1Database} db - The D1 database binding
+ * @returns {Promise<string[]>}
+ */
+export async function getEnabledFeedIds(db) {
+	const result = await db.prepare('SELECT id FROM feeds WHERE no_crawl = 0').all();
+	return result.results.map((row) => row.id);
+}
+
+/**
+ * Return full feed rows for the given array of feed IDs.
+ * Used by the queue consumer to re-hydrate feed objects from the IDs enqueued by the dispatcher.
+ * Returns an empty array when ids is empty.
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string[]} ids - Array of feed IDs to fetch
  * @returns {Promise<Array>}
  */
-export async function getEnabledFeeds(db) {
-	const result = await db.prepare('SELECT * FROM feeds WHERE no_crawl = 0').all();
+export async function getFeedsByIds(db, ids) {
+	if (!ids || ids.length === 0) {
+		return [];
+	}
+	const placeholders = ids.map(() => '?').join(', ');
+	const result = await db
+		.prepare(`SELECT * FROM feeds WHERE id IN (${placeholders})`)
+		.bind(...ids)
+		.all();
 	return result.results;
 }
 
 /**
  * Return the most recent N crawl runs ordered by started_at DESC.
+ * Aggregate totals are derived at query time from crawl_run_details rows via LEFT JOIN.
+ * Returns 0 for all totals when no detail rows exist for a run.
  *
  * @param {D1Database} db - The D1 database binding
  * @param {number} limit - Maximum number of rows to return
  * @returns {Promise<Array>}
  */
 export async function getCrawlRuns(db, limit) {
-	const result = await db
-		.prepare('SELECT * FROM crawl_runs ORDER BY started_at DESC LIMIT ?')
-		.bind(limit)
-		.all();
+	const sql = `
+		SELECT
+			r.id,
+			r.started_at,
+			r.created_at,
+			COALESCE(COUNT(d.feed_id), 0) AS total_feeds_attempted,
+			COALESCE(SUM(CASE WHEN d.status = 'failed' OR d.status = 'auto_disabled' THEN 1 ELSE 0 END), 0) AS total_feeds_failed,
+			COALESCE(SUM(d.articles_added), 0) AS total_articles_added
+		FROM crawl_runs r
+		LEFT JOIN crawl_run_details d ON r.id = d.crawl_run_id
+		GROUP BY r.id, r.started_at, r.created_at
+		ORDER BY r.started_at DESC
+		LIMIT ?
+	`;
+	const result = await db.prepare(sql).bind(limit).all();
 	return result.results;
 }
 
 /**
  * Return a single crawl run by its id, or null if not found.
+ * Aggregate totals are derived at query time from crawl_run_details rows via LEFT JOIN.
+ * Returns 0 for all totals when no detail rows exist for the run.
  *
  * @param {D1Database} db - The D1 database binding
  * @param {string} crawlRunId - The crawl run id to look up
  * @returns {Promise<Object|null>}
  */
 export async function getCrawlRunById(db, crawlRunId) {
-	const row = await db.prepare('SELECT * FROM crawl_runs WHERE id = ?').bind(crawlRunId).first();
+	const sql = `
+		SELECT
+			r.id,
+			r.started_at,
+			r.created_at,
+			COALESCE(COUNT(d.feed_id), 0) AS total_feeds_attempted,
+			COALESCE(SUM(CASE WHEN d.status = 'failed' OR d.status = 'auto_disabled' THEN 1 ELSE 0 END), 0) AS total_feeds_failed,
+			COALESCE(SUM(d.articles_added), 0) AS total_articles_added
+		FROM crawl_runs r
+		LEFT JOIN crawl_run_details d ON r.id = d.crawl_run_id
+		WHERE r.id = ?
+		GROUP BY r.id, r.started_at, r.created_at
+	`;
+	const row = await db.prepare(sql).bind(crawlRunId).first();
 	return row ?? null;
 }
 
@@ -303,28 +353,25 @@ export async function getCrawlRunDetails(db, crawlRunId) {
 }
 
 /**
- * Insert a new row into crawl_runs at crawl completion.
+ * Insert a new row into crawl_runs when a crawl run begins.
  * The caller generates the id via crypto.randomUUID() before calling this.
+ * Totals are no longer stored here; they are derived at query time from crawl_run_details.
  *
  * @param {D1Database} db - The D1 database binding
  * @param {{
  *   id: string,
- *   startedAt: string,
- *   completedAt: string,
- *   totalFeedsAttempted: number,
- *   totalFeedsFailed: number,
- *   totalArticlesAdded: number
+ *   startedAt: string
  * }} crawlRun - The crawl run data to insert
  * @returns {Promise<D1Result>}
  */
-export async function recordCrawlRun(db, { id, startedAt, completedAt, totalFeedsAttempted, totalFeedsFailed, totalArticlesAdded }) {
+export async function recordCrawlRun(db, { id, startedAt }) {
 	const sql = `
-		INSERT INTO crawl_runs (id, started_at, completed_at, total_feeds_attempted, total_feeds_failed, total_articles_added)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO crawl_runs (id, started_at)
+		VALUES (?, ?)
 	`;
 	return db
 		.prepare(sql)
-		.bind(id, startedAt, completedAt, totalFeedsAttempted, totalFeedsFailed, totalArticlesAdded)
+		.bind(id, startedAt)
 		.run();
 }
 

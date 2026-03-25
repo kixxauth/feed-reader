@@ -140,20 +140,18 @@ CREATE INDEX idx_articles_feed_published ON articles(feed_id, published);
 
 ### `crawl_runs` table
 
-Created by migration `0004_create_crawl_runs_table.sql`. One row per scheduled crawl execution.
+Created by migration `0004_create_crawl_runs_table.sql`, simplified by migrations `0010` and `0011`. One row per scheduled crawl execution (header row only — no denormalized totals).
 
 ```sql
 CREATE TABLE crawl_runs (
-  id                     TEXT PRIMARY KEY,
-  started_at             TEXT NOT NULL,
-  completed_at           TEXT,
-  total_feeds_attempted  INTEGER NOT NULL,
-  total_feeds_failed     INTEGER NOT NULL,
-  total_articles_added   INTEGER NOT NULL,
-  created_at             TEXT DEFAULT CURRENT_TIMESTAMP
+  id         TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_crawl_runs_started_at ON crawl_runs(started_at DESC);
 ```
+
+The three summary columns (`total_feeds_attempted`, `total_feeds_failed`, `total_articles_added`) were removed by migration `0010`. Totals are derived at query time via `LEFT JOIN` aggregation over `crawl_run_details`. `completed_at` was removed by migration `0011` — it was never written to and there is no mechanism to determine run completion time in the queue fan-out architecture.
 
 ### `crawl_run_details` table
 
@@ -367,6 +365,8 @@ Protected. Lists the most recent 30 crawl runs, newest first. Shows started time
 
 Protected. Shows per-feed results for a single crawl run. Each row shows the feed name (linked to the feed website), articles added, status badge (`Success`, `Failed`, or `Auto-disabled`), and any error message. Returns 404 if the run ID is not found.
 
+- **Failed-only filter**: `?failed=1` filters the detail rows to show only feeds with `failed` or `auto_disabled` status. A "Show failed only" / "Show all" toggle link switches between views.
+
 ### Toggle Feed Crawl (`POST /api/feeds/:feedId/toggle-crawl`)
 
 Protected. Flips the `no_crawl` flag for a feed:
@@ -395,22 +395,65 @@ Public. Deletes the session from KV, clears the cookie, and redirects to `/logge
 
 The crawl runs automatically once per day at **02:00 UTC** via a Cloudflare cron trigger (`0 2 * * *`). This is configured in `wrangler.jsonc` under `triggers.crons`.
 
-### Crawl Logic (`src/crawl.js`)
+### Crawl Architecture: Dispatch + Queue Consumer
 
-`performCrawl(db)` is the main entry point for scheduled crawls:
+The scheduled crawl uses a two-phase fan-out pipeline backed by **Cloudflare Queues** (`feed-crawl-queue`):
 
-1. Fetches all feeds with `no_crawl = 0` from the database.
-2. For each feed, fetches the RSS/Atom XML from `xml_url` (30-second timeout, `FeedReader/1.0` user agent).
-3. Parses the XML using the `sax` event-driven parser (`src/parser.js`). Supports both **RSS 2.0** and **Atom 1.0**.
-4. Extracts articles: derives a stable `id` as `{feedId}:{guid-or-link}`, normalizes title/link/published/updated.
-5. Upserts each article (INSERT ... ON CONFLICT DO NOTHING effectively — only `meta.changes` count as added).
-6. On success: resets `consecutive_failure_count` to 0.
-7. On failure: increments `consecutive_failure_count`. If it reaches **5**, the feed is auto-disabled (`no_crawl = 1`) and the detail status is set to `auto_disabled`.
-8. Records a `crawl_run_details` row for every feed processed.
-9. Records a `crawl_runs` summary row after all feeds are processed.
-10. Returns `{ crawlRunId, totalFeeds, totalFailed, totalArticlesAdded }` for logging.
+**Phase 1 — Dispatcher** (`dispatchCrawl`, called from the `scheduled` handler):
+1. Queries all enabled feed IDs (`no_crawl = 0`) from D1.
+2. Generates a shared `crawlRunId` (UUID) and `startedAt` timestamp.
+3. Inserts the `crawl_runs` header row (id and started_at only).
+4. Splits IDs into batches of 50 and enqueues each as a queue message carrying `{ crawlRunId, startedAt, feedIds }`.
+5. Returns `{ crawlRunId, totalFeeds, batchCount }` for logging.
 
-`performFeedCrawl(db, feedId, crawlRunId)` is the single-feed entry point used by the add-feed flow. It reuses the same history recording and failure-count logic as the scheduled crawl but operates on one newly created feed and uses the pre-generated `crawlRunId` included in the `/feeds` redirect.
+This is lightweight and fast — it only touches D1 once (for the header row) and fires batch messages to the queue.
+
+**Phase 2 — Queue Consumer** (`processCrawlBatch`, called from the `queue` handler):
+Each message triggers a separate consumer invocation that:
+1. Re-hydrates full feed objects from the batch's `feedIds` via `getFeedsByIds`.
+2. Processes feeds in **concurrent groups of 6** (the per-invocation connection limit) using `Promise.all`.
+3. For each feed: fetches the RSS/Atom XML (30-second timeout, `FeedReader/1.0` user agent), parses it, and inserts new articles (`ON CONFLICT DO NOTHING`).
+4. On success: resets `consecutive_failure_count` to 0.
+5. On failure: increments `consecutive_failure_count`. If it reaches **5**, auto-disables the feed (`no_crawl = 1`).
+6. Records a `crawl_run_details` row for every feed processed.
+7. Returns `{ crawlRunId, totalFeeds, totalFailed, totalArticlesAdded }` and acknowledges the message.
+
+If a consumer throws before acking, the queue will retry the message (at most once with the current config of `max_batch_size: 1`, `max_batch_timeout: 0`).
+
+**Crawl history totals** (feeds attempted, feeds failed, articles added) are not stored on the `crawl_runs` row. They are derived at query time via `LEFT JOIN` aggregation over `crawl_run_details`, which eliminates any need for end-of-crawl coordination across consumers.
+
+**Single-feed path** (`performFeedCrawl`): used immediately after a user adds a feed via the UI. It inserts its own `crawl_runs` row and delegates to `processCrawlBatch` for the actual crawl and history recording. Behavior and return shape are unchanged from the pre-refactor version.
+
+### Article ID Derivation
+
+For crawled articles, IDs are derived as `{feedId}:{guid-or-link}`:
+- RSS: uses `<guid>` text content, falls back to `<link>`
+- Atom: uses `<id>` element, falls back to `<link href>`
+- Articles with no guid and no link are skipped.
+
+This makes IDs stable across re-crawls so upsert deduplication works correctly.
+
+### Auto-Disable on Failure
+
+If a feed fails to crawl 5 consecutive times, it is automatically disabled. The feed:
+- Has `no_crawl` set to `1`
+- Shows as `Disabled` on the Feeds page
+- Is marked `Auto-disabled` in crawl history detail
+- Can be re-enabled from the Feeds page; re-enabling also resets the failure count to 0.
+
+### Local Testing
+
+To trigger the scheduled crawl handler locally:
+
+```bash
+# Start dev server with scheduled event support
+npx wrangler dev --test-scheduled
+
+# In another terminal, trigger the cron
+curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
+```
+
+Note: local testing of the queue consumer path requires `wrangler dev` with queue support. The `dispatchCrawl` call will enqueue messages, but the `queue` handler will only fire if wrangler's local queue simulation is running. In practice, the consumer path is most easily tested via `npm test`.
 
 ### Article ID Derivation
 
@@ -465,6 +508,15 @@ curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
   "triggers": {
     "crons": ["0 2 * * *"]
   },
+  "queues": {
+    "producers": [{ "binding": "CRAWL_QUEUE", "queue": "feed-crawl-queue" }],
+    "consumers": [{
+      "queue": "feed-crawl-queue",
+      "max_batch_size": 1,
+      "max_batch_timeout": 0,
+      "max_retries": 3
+    }]
+  },
   "observability": { "enabled": true },
   "keep_vars": true,
   "vars": {
@@ -473,6 +525,12 @@ curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
   }
 }
 ```
+
+**`queues` section notes:**
+- `max_batch_size: 1` — each consumer invocation receives exactly one dispatcher message (which itself contains up to 50 feed IDs). This ensures each batch is isolated in its own invocation.
+- `max_batch_timeout: 0` — consumer is triggered immediately when a message arrives rather than waiting to batch.
+- `max_retries: 3` — a consumer that throws without acking is retried up to 3 times before the message is discarded. Without this, Cloudflare's default retry behavior applies (implementation-defined).
+- The queue `feed-crawl-queue` must be created in Cloudflare before deploying (see First-Time Setup).
 
 ### Environment Variables (`vars`)
 
@@ -532,9 +590,12 @@ npx wrangler d1 create feed-reader-db
 
 # Create the KV namespace
 npx wrangler kv namespace create SESSIONS
+
+# Create the crawl queue
+npx wrangler queues create feed-crawl-queue
 ```
 
-Copy the returned `id` values into `wrangler.jsonc` under `d1_databases[0].database_id` and `kv_namespaces[0].id`.
+Copy the returned `id` values into `wrangler.jsonc` under `d1_databases[0].database_id` and `kv_namespaces[0].id`. The queue name `feed-crawl-queue` is already correct in `wrangler.jsonc`; no ID to copy.
 
 ### Step 3: Set Secrets
 
@@ -783,9 +844,9 @@ feed-reader/
 
 | File | Responsibility |
 |---|---|
-| `src/index.js` | Mounts middleware and all routes; exports the Hono app and `scheduled` handler |
-| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeeds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed`, `getDailyReaderArticles`, `updateFeedFeatured` |
-| `src/crawl.js` | `performCrawl`, `performFeedCrawl` — scheduled and immediate crawl entry points sharing the same history/failure logic |
+| `src/index.js` | Mounts middleware and all routes; exports the Hono app, `scheduled` handler (dispatches crawl), and `queue` handler (processes crawl batches) |
+| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeedIds`, `getFeedsByIds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed`, `getDailyReaderArticles`, `updateFeedFeatured` |
+| `src/crawl.js` | `dispatchCrawl` (cron dispatcher), `processCrawlBatch` (queue consumer), `performFeedCrawl` (single-feed immediate crawl for the add-feed flow) |
 | `src/feed-discovery.js` | Add-feed URL validation, website scraping, candidate discovery, and user-facing validation messages |
 | `src/feed-utils.js` | URL canonicalization, duplicate-comparison normalization, hostname derivation, and article URL resolution |
 | `src/parser.js` | `parseFeedXml` (article extraction) and `parseFeedPreview` (feed-level metadata for the add-feed flow) |
@@ -813,7 +874,7 @@ feed-reader/
 | Cascading deletes | Articles are not removed when a feed is deleted |
 | Rate limiting | No application-layer rate limiting; enforce via Cloudflare WAF if needed (particularly on `/auth/start` to limit KV writes) |
 | Crawl scheduling | Cron interval is fixed at daily (02:00 UTC); changing it requires editing `wrangler.jsonc` and redeploying |
-| Crawl concurrency | Feeds are crawled sequentially (one at a time), not in parallel |
+| Crawl concurrency | Within each queue batch, feeds are processed 6 at a time concurrently. Across batches, the number of concurrent consumer invocations is controlled by Cloudflare's queue delivery. There is no application-level cap on total concurrent consumers. |
 | Article content | Only article metadata is stored (title, link, dates); full article body is not fetched or stored |
 | Add-feed state | The multi-step add-feed flow serializes discovered candidates into hidden form fields; very large candidate sets would increase HTML form size |
 | Website discovery | Feed discovery only checks `<link>` metadata and a short list of common feed paths; JavaScript-rendered sites are not supported |

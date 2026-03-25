@@ -144,4 +144,3 @@ The `scripts/hydrate-template.js` utility substitutes `{{variable}}` placeholder
 ```bash
 node scripts/hydrate-template.js <template-file> <context-yaml-file>
 ```
-

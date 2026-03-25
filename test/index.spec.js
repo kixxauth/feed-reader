@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import worker from '../src';
 import { createSession } from '../src/auth/session.js';
 import { createState, consumeState } from '../src/auth/state.js';
-import { performCrawl, performFeedCrawl } from '../src/crawl.js';
+import { processCrawlBatch, performFeedCrawl } from '../src/crawl.js';
 import { discoverFeedTargets, previewDirectFeedUrl, ADD_FEED_MESSAGES } from '../src/feed-discovery.js';
 import { parseFeedPreview } from '../src/parser.js';
 
@@ -100,16 +100,12 @@ async function clearCrawlRunDetails() {
 async function seedCrawlRuns(runs) {
 	for (const run of runs) {
 		await env.DB.prepare(
-			`INSERT INTO crawl_runs (id, started_at, completed_at, total_feeds_attempted, total_feeds_failed, total_articles_added)
-			 VALUES (?, ?, ?, ?, ?, ?)`
+			`INSERT INTO crawl_runs (id, started_at)
+			 VALUES (?, ?)`
 		)
 			.bind(
 				run.id,
-				run.started_at,
-				run.completed_at ?? null,
-				run.total_feeds_attempted ?? 0,
-				run.total_feeds_failed ?? 0,
-				run.total_articles_added ?? 0
+				run.started_at
 			)
 			.run();
 	}
@@ -1353,7 +1349,7 @@ describe('Crawl functionality', () => {
 		vi.restoreAllMocks();
 	});
 
-	it('performCrawl fetches enabled feeds and inserts new articles', async () => {
+	it('processCrawlBatch fetches feeds by ID and inserts new articles', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-1',
@@ -1364,6 +1360,10 @@ describe('Crawl functionality', () => {
 			},
 		]);
 
+		const crawlRunId = 'test-run-1';
+		const startedAt = new Date().toISOString();
+		await seedCrawlRuns([{ id: crawlRunId, started_at: startedAt }]);
+
 		const rssXml = makeRssFeed([
 			{ guid: 'guid-1', link: 'https://example.com/1', title: 'Article One', pubDate: 'Thu, 23 Mar 2026 12:00:00 GMT' },
 			{ guid: 'guid-2', link: 'https://example.com/2', title: 'Article Two', pubDate: 'Wed, 22 Mar 2026 12:00:00 GMT' },
@@ -1373,13 +1373,13 @@ describe('Crawl functionality', () => {
 			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
 		);
 
-		const summary = await performCrawl(env.DB);
+		const summary = await processCrawlBatch(env.DB, { crawlRunId, startedAt, feedIds: ['feed-1'] });
 
 		// Summary reflects the inserted articles
 		expect(summary.totalFeeds).toBe(1);
 		expect(summary.totalFailed).toBe(0);
 		expect(summary.totalArticlesAdded).toBe(2);
-		expect(summary.crawlRunId).toBeTruthy();
+		expect(summary.crawlRunId).toBe(crawlRunId);
 
 		// Articles are actually in the DB
 		const { results } = await env.DB.prepare('SELECT * FROM articles ORDER BY title').all();
@@ -1387,15 +1387,14 @@ describe('Crawl functionality', () => {
 		expect(results[0].title).toBe('Article One');
 		expect(results[1].title).toBe('Article Two');
 
-		// Crawl run is recorded
-		const { results: runs } = await env.DB.prepare('SELECT * FROM crawl_runs').all();
-		expect(runs).toHaveLength(1);
-		expect(runs[0].total_articles_added).toBe(2);
-		expect(runs[0].total_feeds_attempted).toBe(1);
-		expect(runs[0].total_feeds_failed).toBe(0);
+		// Aggregate totals from detail rows are correct
+		const details = await env.DB.prepare('SELECT * FROM crawl_run_details WHERE crawl_run_id = ?').bind(crawlRunId).all();
+		expect(details.results).toHaveLength(1);
+		expect(details.results[0].articles_added).toBe(2);
+		expect(details.results[0].status).toBe('success');
 	});
 
-	it('performCrawl skips feeds with no_crawl = 1', async () => {
+	it('processCrawlBatch skips feeds not in the provided feedIds (disabled feeds excluded at dispatch)', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-enabled',
@@ -1415,6 +1414,10 @@ describe('Crawl functionality', () => {
 			},
 		]);
 
+		const crawlRunId = 'test-run-skip';
+		const startedAt = new Date().toISOString();
+		await seedCrawlRuns([{ id: crawlRunId, started_at: startedAt }]);
+
 		const rssXml = makeRssFeed([
 			{ guid: 'guid-1', link: 'https://enabled.example.com/1', title: 'Enabled Article' },
 		]);
@@ -1423,16 +1426,17 @@ describe('Crawl functionality', () => {
 			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
 		);
 
-		await performCrawl(env.DB);
+		// Dispatcher only enqueues enabled feed IDs — pass only 'feed-enabled'
+		await processCrawlBatch(env.DB, { crawlRunId, startedAt, feedIds: ['feed-enabled'] });
 
-		// Only one fetch call — the disabled feed is skipped entirely
+		// Only one fetch call — only the enabled feed ID was passed
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		const calledUrl = String(fetchSpy.mock.calls[0][0]);
 		expect(calledUrl).toContain('enabled.example.com');
 		expect(calledUrl).not.toContain('disabled.example.com');
 	});
 
-	it('performCrawl increments failure count on fetch error', async () => {
+	it('processCrawlBatch increments failure count on fetch error', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-1',
@@ -1444,9 +1448,13 @@ describe('Crawl functionality', () => {
 			},
 		]);
 
+		const crawlRunId = 'test-run-fail';
+		const startedAt = new Date().toISOString();
+		await seedCrawlRuns([{ id: crawlRunId, started_at: startedAt }]);
+
 		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
 
-		await performCrawl(env.DB);
+		await processCrawlBatch(env.DB, { crawlRunId, startedAt, feedIds: ['feed-1'] });
 
 		// Failure count incremented to 1, feed still enabled (not auto-disabled)
 		const row = await env.DB.prepare('SELECT * FROM feeds WHERE id = ?').bind('feed-1').first();
@@ -1454,7 +1462,7 @@ describe('Crawl functionality', () => {
 		expect(row.no_crawl).toBe(0);
 	});
 
-	it('performCrawl auto-disables feed after 5 consecutive failures', async () => {
+	it('processCrawlBatch auto-disables feed after 5 consecutive failures', async () => {
 		// Feed already has 4 consecutive failures; one more triggers auto-disable
 		await seedFeeds([
 			{
@@ -1467,9 +1475,13 @@ describe('Crawl functionality', () => {
 			},
 		]);
 
+		const crawlRunId = 'test-run-autodisable';
+		const startedAt = new Date().toISOString();
+		await seedCrawlRuns([{ id: crawlRunId, started_at: startedAt }]);
+
 		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
 
-		await performCrawl(env.DB);
+		await processCrawlBatch(env.DB, { crawlRunId, startedAt, feedIds: ['feed-1'] });
 
 		// After the 5th failure the feed should be auto-disabled.
 		// disableFeed() sets no_crawl=1 AND resets consecutive_failure_count=0.
@@ -1485,7 +1497,7 @@ describe('Crawl functionality', () => {
 		expect(detail.status).toBe('auto_disabled');
 	});
 
-	it('performCrawl resets failure count to 0 on success', async () => {
+	it('processCrawlBatch resets failure count to 0 on success', async () => {
 		// Feed has pre-existing failures; a successful crawl should reset the count
 		await seedFeeds([
 			{
@@ -1498,6 +1510,10 @@ describe('Crawl functionality', () => {
 			},
 		]);
 
+		const crawlRunId = 'test-run-reset';
+		const startedAt = new Date().toISOString();
+		await seedCrawlRuns([{ id: crawlRunId, started_at: startedAt }]);
+
 		const rssXml = makeRssFeed([
 			{ guid: 'guid-1', link: 'https://example.com/1', title: 'Fresh Article' },
 		]);
@@ -1506,7 +1522,7 @@ describe('Crawl functionality', () => {
 			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
 		);
 
-		await performCrawl(env.DB);
+		await processCrawlBatch(env.DB, { crawlRunId, startedAt, feedIds: ['feed-1'] });
 
 		// Failure count reset to 0 after a successful crawl
 		const row = await env.DB.prepare('SELECT * FROM feeds WHERE id = ?').bind('feed-1').first();
@@ -1514,7 +1530,7 @@ describe('Crawl functionality', () => {
 		expect(row.no_crawl).toBe(0);
 	});
 
-	it('performCrawl does not duplicate articles on re-crawl', async () => {
+	it('processCrawlBatch does not duplicate articles on re-crawl', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-1',
@@ -1533,16 +1549,24 @@ describe('Crawl functionality', () => {
 			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
 		);
 
-		// Run crawl twice with identical feed content
-		await performCrawl(env.DB);
-		await performCrawl(env.DB);
+		const startedAt = new Date().toISOString();
+
+		// First crawl batch
+		const crawlRunId1 = 'test-run-dedup-1';
+		await seedCrawlRuns([{ id: crawlRunId1, started_at: startedAt }]);
+		await processCrawlBatch(env.DB, { crawlRunId: crawlRunId1, startedAt, feedIds: ['feed-1'] });
+
+		// Second crawl batch with identical feed content
+		const crawlRunId2 = 'test-run-dedup-2';
+		await seedCrawlRuns([{ id: crawlRunId2, started_at: startedAt }]);
+		await processCrawlBatch(env.DB, { crawlRunId: crawlRunId2, startedAt, feedIds: ['feed-1'] });
 
 		// Only one article row should exist despite two crawls (ON CONFLICT DO NOTHING)
 		const { results } = await env.DB.prepare('SELECT * FROM articles').all();
 		expect(results).toHaveLength(1);
 	});
 
-	it('performCrawl stores error message on failure', async () => {
+	it('processCrawlBatch stores error message on failure', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-1',
@@ -1553,11 +1577,15 @@ describe('Crawl functionality', () => {
 			},
 		]);
 
+		const crawlRunId = 'test-run-errmsg';
+		const startedAt = new Date().toISOString();
+		await seedCrawlRuns([{ id: crawlRunId, started_at: startedAt }]);
+
 		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
 			new Response('Not Found', { status: 404 })
 		);
 
-		await performCrawl(env.DB);
+		await processCrawlBatch(env.DB, { crawlRunId, startedAt, feedIds: ['feed-1'] });
 
 		// crawl_run_details should record the HTTP error message
 		const detail = await env.DB.prepare(
@@ -1568,7 +1596,7 @@ describe('Crawl functionality', () => {
 		expect(detail.error_message).toBe('Could not reach the feed URL (network error or server unavailable)');
 	});
 
-	it('performCrawl returns summary with correct counts', async () => {
+	it('processCrawlBatch returns summary with correct counts', async () => {
 		await seedFeeds([
 			{
 				id: 'feed-ok',
@@ -1586,6 +1614,10 @@ describe('Crawl functionality', () => {
 			},
 		]);
 
+		const crawlRunId = 'test-run-summary';
+		const startedAt = new Date().toISOString();
+		await seedCrawlRuns([{ id: crawlRunId, started_at: startedAt }]);
+
 		const rssXml = makeRssFeed([
 			{ guid: 'guid-a', link: 'https://ok.example.com/a', title: 'Article A' },
 			{ guid: 'guid-b', link: 'https://ok.example.com/b', title: 'Article B' },
@@ -1599,22 +1631,22 @@ describe('Crawl functionality', () => {
 			return new Response('Internal Server Error', { status: 500 });
 		});
 
-		const summary = await performCrawl(env.DB);
+		const summary = await processCrawlBatch(env.DB, { crawlRunId, startedAt, feedIds: ['feed-ok', 'feed-bad'] });
 
 		expect(summary.totalFeeds).toBe(2);
 		expect(summary.totalFailed).toBe(1);
 		expect(summary.totalArticlesAdded).toBe(2);
-		expect(typeof summary.crawlRunId).toBe('string');
-		expect(summary.crawlRunId.length).toBeGreaterThan(0);
+		expect(summary.crawlRunId).toBe(crawlRunId);
 
-		// Verify the crawl_runs row matches the returned summary
-		const run = await env.DB.prepare(
-			'SELECT * FROM crawl_runs WHERE id = ?'
-		).bind(summary.crawlRunId).first();
-		expect(run).toBeTruthy();
-		expect(run.total_feeds_attempted).toBe(2);
-		expect(run.total_feeds_failed).toBe(1);
-		expect(run.total_articles_added).toBe(2);
+		// Verify aggregated totals from crawl_run_details match the summary
+		const { results: details } = await env.DB.prepare(
+			'SELECT * FROM crawl_run_details WHERE crawl_run_id = ?'
+		).bind(crawlRunId).all();
+		const totalArticles = details.reduce((acc, d) => acc + d.articles_added, 0);
+		const totalFailed = details.filter((d) => d.status === 'failed' || d.status === 'auto_disabled').length;
+		expect(details).toHaveLength(2);
+		expect(totalArticles).toBe(2);
+		expect(totalFailed).toBe(1);
 	});
 
 	it('performFeedCrawl records a failed single-feed crawl with the invalid-content message', async () => {
@@ -1639,11 +1671,20 @@ describe('Crawl functionality', () => {
 		expect(summary.totalFeeds).toBe(1);
 		expect(summary.totalFailed).toBe(1);
 
+		// Verify the crawl_runs row was created with the expected id and started_at
+		const run = await env.DB.prepare('SELECT * FROM crawl_runs WHERE id = ?').bind('single-run-1').first();
+		expect(run).toBeTruthy();
+		expect(run.id).toBe('single-run-1');
+		expect(run.started_at).toBeTruthy();
+
+		// Verify the crawl_run_details row was created with the correct error message
 		const detail = await env.DB
 			.prepare('SELECT * FROM crawl_run_details WHERE crawl_run_id = ? AND feed_id = ?')
 			.bind('single-run-1', 'feed-1')
 			.first();
+		expect(detail).toBeTruthy();
 		expect(detail.error_message).toBe('The feed returned invalid content');
+		expect(detail.status).toBe('failed');
 	});
 });
 
@@ -1809,7 +1850,7 @@ describe('Feed detail page', () => {
 
 	it('GET /feeds/feed-1 shows crawl run status in recent activity list', async () => {
 		await seedCrawlRuns([
-			{ id: 'run-1', started_at: '2024-01-15T10:00:00Z', completed_at: '2024-01-15T10:01:00Z' },
+			{ id: 'run-1', started_at: '2024-01-15T10:00:00Z' },
 		]);
 		await seedCrawlRunDetails([
 			{

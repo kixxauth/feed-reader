@@ -2,21 +2,30 @@
  * RSS/Atom feed crawl logic.
  *
  * Exports:
- *   performCrawl(db) — fetches all enabled feeds, parses each feed's XML,
- *   inserts new articles, tracks per-feed failure counts, auto-disables feeds
- *   after 5 consecutive failures, and records crawl history.
+ *   dispatchCrawl(db, queue)   — cron-triggered dispatcher: queries enabled feed IDs,
+ *                                inserts the crawl_runs header row, and enqueues
+ *                                batches of 50 feed IDs for queue consumer processing.
+ *   processCrawlBatch(db, { crawlRunId, startedAt, feedIds })
+ *                              — queue consumer: fetches full feed objects for the given
+ *                                IDs, processes them 6 at a time concurrently, writes all
+ *                                per-feed DB updates and crawl_run_details rows, and
+ *                                returns a summary object.
+ *   performFeedCrawl(db, feedId, crawlRunId)
+ *                              — single-feed crawl used immediately after a user adds a
+ *                                feed via the UI; inserts its own crawl_runs row and
+ *                                delegates to processCrawlBatch for the actual crawl.
  *
  * Supports both RSS 2.0 and Atom 1.0.
  *
- * Returns a summary object { crawlRunId, totalFeeds, totalFailed, totalArticlesAdded }
- * suitable for logging by the scheduled handler.
+ * All entry points return a summary object { crawlRunId, totalFeeds, totalFailed, totalArticlesAdded }.
  */
 
 import { parseFeedPreview, parseFeedXml } from './parser.js';
 import { resolveArticleUrl } from './feed-utils.js';
 import {
-	getEnabledFeeds,
+	getEnabledFeedIds,
 	getFeedById,
+	getFeedsByIds,
 	resetFeedFailureCount,
 	updateFeedFailureCount,
 	disableFeed,
@@ -157,68 +166,109 @@ function normalizeCrawlErrorMessage(message) {
 		return 'Failed to parse the feed XML';
 	}
 
-	if (message === 'Request timeout (30s)' || message.startsWith('HTTP ') || message.length > 0) {
-		return 'Could not reach the feed URL (network error or server unavailable)';
-	}
-
 	return 'Could not reach the feed URL (network error or server unavailable)';
 }
 
+
 /**
- * Crawl a specific list of feeds, record history, and return the summary.
+ * Cron-triggered dispatcher: query all enabled feed IDs, insert the crawl_runs
+ * header row, split IDs into batches of 50, and enqueue each batch as a queue
+ * message. Each message carries the shared crawlRunId and startedAt so all
+ * consumer invocations contribute to one logical crawl run.
  *
  * @param {D1Database} db
- * @param {Array<object>} feeds
- * @param {string} crawlRunId
+ * @param {Queue} queue - Cloudflare Queue producer binding (env.CRAWL_QUEUE)
+ * @returns {Promise<{ crawlRunId: string|null, totalFeeds: number, batchCount: number }>}
+ *   crawlRunId is null when there are no enabled feeds (no crawl_runs row is inserted).
+ */
+export async function dispatchCrawl(db, queue) {
+	const ids = await getEnabledFeedIds(db);
+
+	if (ids.length === 0) {
+		console.log('Crawl dispatch skipped: no enabled feeds');
+		return { crawlRunId: null, totalFeeds: 0, batchCount: 0 };
+	}
+
+	const crawlRunId = crypto.randomUUID();
+	const startedAt = new Date().toISOString();
+
+	await recordCrawlRun(db, { id: crawlRunId, startedAt });
+
+	const BATCH_SIZE = 50;
+	const batches = [];
+	for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+		batches.push(ids.slice(i, i + BATCH_SIZE));
+	}
+
+	await queue.sendBatch(
+		batches.map((feedIds) => ({
+			body: { crawlRunId, startedAt, feedIds },
+		}))
+	);
+
+	return {
+		crawlRunId,
+		totalFeeds: ids.length,
+		batchCount: batches.length,
+	};
+}
+
+/**
+ * Process a batch of feed IDs as a queue consumer invocation.
+ * Re-hydrates full feed objects from the provided IDs, processes them in
+ * concurrent groups of 6 (the per-invocation connection limit), writes all
+ * per-feed DB updates, and returns a summary.
+ *
+ * Does NOT insert the crawl_runs row — that is the dispatcher's responsibility
+ * via dispatchCrawl.
+ *
+ * @param {D1Database} db
+ * @param {{ crawlRunId: string, startedAt: string, feedIds: string[] }} batch
  * @returns {Promise<{ crawlRunId: string, totalFeeds: number, totalFailed: number, totalArticlesAdded: number }>}
  */
-async function performCrawlForFeeds(db, feeds, crawlRunId) {
-	const startedAt = new Date().toISOString();
+export async function processCrawlBatch(db, { crawlRunId, startedAt, feedIds }) {
+	const feeds = await getFeedsByIds(db, feedIds);
 
 	let totalFailed = 0;
 	let totalArticlesAdded = 0;
 
-	for (const feed of feeds) {
-		const feedResult = await processFeed(feed, startedAt, db);
+	// Process feeds in concurrent groups of 6
+	const CONCURRENCY = 6;
+	for (let i = 0; i < feeds.length; i += CONCURRENCY) {
+		const group = feeds.slice(i, i + CONCURRENCY);
+		await Promise.all(
+			group.map(async (feed) => {
+				const feedResult = await processFeed(feed, startedAt, db);
 
-		let autoDisabled = 0;
+				let autoDisabled = 0;
 
-		if (feedResult.status === 'success') {
-			await resetFeedFailureCount(db, feed.id);
-			totalArticlesAdded += feedResult.articlesAdded;
-		} else {
-			totalFailed += 1;
-			const newFailureCount = (feed.consecutive_failure_count ?? 0) + 1;
+				if (feedResult.status === 'success') {
+					await resetFeedFailureCount(db, feed.id);
+					totalArticlesAdded += feedResult.articlesAdded;
+				} else {
+					totalFailed += 1;
+					const newFailureCount = (feed.consecutive_failure_count ?? 0) + 1;
 
-			if (newFailureCount >= AUTO_DISABLE_THRESHOLD) {
-				await disableFeed(db, feed.id);
-				autoDisabled = 1;
-			} else {
-				await updateFeedFailureCount(db, feed.id, newFailureCount);
-			}
-		}
+					if (newFailureCount >= AUTO_DISABLE_THRESHOLD) {
+						await disableFeed(db, feed.id);
+						autoDisabled = 1;
+					} else {
+						await updateFeedFailureCount(db, feed.id, newFailureCount);
+					}
+				}
 
-		const detailStatus = autoDisabled ? 'auto_disabled' : feedResult.status;
-		await recordCrawlRunDetail(db, {
-			crawlRunId,
-			feedId: feed.id,
-			status: detailStatus,
-			articlesAdded: feedResult.articlesAdded,
-			errorMessage: feedResult.errorMessage,
-			autoDisabled,
-		});
+				const detailStatus = autoDisabled ? 'auto_disabled' : feedResult.status;
+				await recordCrawlRunDetail(db, {
+					crawlRunId,
+					feedId: feed.id,
+					status: detailStatus,
+					articlesAdded: feedResult.articlesAdded,
+					errorMessage: feedResult.errorMessage,
+					autoDisabled,
+				});
+			})
+		);
 	}
-
-	const completedAt = new Date().toISOString();
-
-	await recordCrawlRun(db, {
-		id: crawlRunId,
-		startedAt,
-		completedAt,
-		totalFeedsAttempted: feeds.length,
-		totalFeedsFailed: totalFailed,
-		totalArticlesAdded,
-	});
 
 	return {
 		crawlRunId,
@@ -229,24 +279,8 @@ async function performCrawlForFeeds(db, feeds, crawlRunId) {
 }
 
 /**
- * Crawl all enabled feeds, insert new articles, track failures, and record
- * crawl history. This is the main entry point called by the scheduled handler.
- *
- * Database errors (from history recording or failure tracking) are allowed to
- * propagate so the scheduled handler can log them. One feed's failure does not
- * stop the crawl; processing continues to the next feed.
- *
- * @param {D1Database} db - The D1 database binding (env.DB)
- * @returns {Promise<{ crawlRunId: string, totalFeeds: number, totalFailed: number, totalArticlesAdded: number }>}
- */
-export async function performCrawl(db) {
-	const crawlRunId = crypto.randomUUID();
-	const feeds = await getEnabledFeeds(db);
-	return await performCrawlForFeeds(db, feeds, crawlRunId);
-}
-
-/**
  * Crawl one feed immediately after it is added via the UI.
+ * Inserts its own crawl_runs row and delegates to processCrawlBatch for the actual crawl.
  *
  * @param {D1Database} db - The D1 database binding (env.DB)
  * @param {string} feedId - The feed id to crawl
@@ -259,5 +293,8 @@ export async function performFeedCrawl(db, feedId, crawlRunId) {
 		throw new Error(`Feed not found: ${feedId}`);
 	}
 
-	return await performCrawlForFeeds(db, [feed], crawlRunId);
+	const startedAt = new Date().toISOString();
+	await recordCrawlRun(db, { id: crawlRunId, startedAt });
+
+	return await processCrawlBatch(db, { crawlRunId, startedAt, feedIds: [feedId] });
 }
