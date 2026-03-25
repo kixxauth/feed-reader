@@ -14,6 +14,15 @@
             "command": "node .claude/hooks/log-bash-calls.mjs"
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/log-subagent-calls.mjs"
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -23,6 +32,15 @@
           {
             "type": "command",
             "command": "node .claude/hooks/log-bash-calls.mjs"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/log-subagent-calls.mjs"
           }
         ]
       }
