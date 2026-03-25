@@ -31,3 +31,19 @@ After starting the development server (`npm start` or `npx wrangler dev`) for te
 This project uses the Hono web development framework for HTTP request handling and server-side rendering of HTML from the Cloudflare Worker.
 
 The full documentation for Hono, including Cloudflare Worker bindings, is available online in Markdown format. Use it for all Hono documentation lookups: https://hono.dev/llms-full.txt
+
+## Database Administration
+You can get the most recent state of the database schema by following the migration SQL scripts in migrations/
+
+### Applying Migrations
+
+```bash
+# Local development
+npx wrangler d1 migrations apply feed-reader-db --local
+```
+
+> **Important** : DO NOT run migrations on the remote environment. You may prompt the user to do it, but NEVER run migrations on the remote environment yourself.
+
+## Deployment
+
+> **Important**: Do not deploy without explicit instructions from the project owner. This project uses manual deploys only.

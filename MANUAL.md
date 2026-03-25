@@ -184,6 +184,8 @@ npx wrangler d1 migrations apply feed-reader-db --local
 npx wrangler d1 migrations apply feed-reader-db --remote
 ```
 
+> **Important**: Do not apply migrations to the remote environment without explicit instructions from the project owner. This project uses manual migrations and deploys only.
+
 ---
 
 ## 3. Authentication System
@@ -762,54 +764,19 @@ feed-reader/
 │   ├── parser.js             # RSS/Atom XML parser (parseFeedXml, parseFeedPreview)
 │   ├── reader-utils.js       # Date helpers for the daily reader view (parseSelectedDate, getPreviousDate, getNextDate, formatDateForDisplay)
 │   ├── styles.css            # Stylesheet (imported as text, inlined into HTML)
-│   ├── auth/
-│   │   ├── middleware.js     # Auth middleware, public paths, session throttle
-│   │   ├── session.js        # Session CRUD (KV-backed)
-│   │   ├── state.js          # OAuth CSRF state tokens (KV-backed)
-│   │   └── github.js         # GitHub OAuth 2.0 implementation
-│   ├── routes/
-│   │   ├── login.js          # GET /login
-│   │   ├── auth-start.js     # GET /auth/start
-│   │   ├── callback.js       # GET /auth/callback
-│   │   ├── logout.js         # GET /logout
-│   │   ├── logged-out.js     # GET /logged-out
-│   │   ├── add-feed.js       # GET /feeds/add and shared rendering helpers for the add-feed flow
-│   │   ├── feeds.js          # GET /feeds
-│   │   ├── feed-detail.js    # GET /feeds/:feedId
-│   │   ├── articles.js       # GET /feeds/:feedId/articles
-│   │   ├── crawl-history.js  # GET /crawl-history, GET /crawl-history/:crawlRunId
-│   │   ├── reader.js         # GET /reader (daily cross-feed reader view)
-│   │   └── api/
-│   │       ├── add-feed.js           # POST /api/feeds/add
-│   │       ├── toggle-feed-crawl.js  # POST /api/feeds/:feedId/toggle-crawl
-│   │       └── toggle-featured.js    # POST /api/feeds/:feedId/toggle-featured
-├── migrations/
-│   ├── 0001_create_feeds_table.sql
-│   ├── 0002_create_articles_table.sql
-│   ├── 0003_add_failure_count_to_feeds.sql
-│   ├── 0004_create_crawl_runs_table.sql
-│   ├── 0005_create_crawl_run_details_table.sql
-│   ├── 0006_add_unique_index_on_feed_xml_url.sql
-│   ├── 0007_add_effective_date_index_on_articles.sql
-│   └── 0008_add_featured_to_feeds.sql
-├── scripts/
-│   ├── import-feeds.js           # CLI: bulk import feeds from SQLite
-│   ├── import-articles.js        # CLI: bulk import articles from SQLite
-│   ├── recover-failed-feeds.js   # CLI: re-discover and repair feeds that failed the last crawl
-│   └── sync-feeds-to-remote.js   # CLI: sync local feeds table to remote D1
-├── test/
-│   └── index.spec.js         # All test cases
+│   ├── auth/                 # Auth middleware, Sessions, OAuth
+│   ├── routes/               # Request handlers
+├── migrations/               # SQL scripts as database migrations
+├── scripts/                  # CLI scripts and tools
+├── test/                     # All test cases
 ├── plans/                    # Implementation plans (historical reference)
-├── documentation/            # Additional topic documentation
-│   ├── authentication.md     # Authentication system deep-dive
-│   └── add-feed.md           # Add-feed feature design rationale and tradeoffs
 ├── wrangler.jsonc            # Cloudflare Workers configuration
 ├── vitest.config.js          # Test configuration
 ├── package.json
-├── .prettierrc
 ├── .dev.vars                 # Local dev secrets (gitignored)
 ├── CLAUDE.md                 # Agent instructions
-└── README.md                 # Quick-start development commands
+├── MANUAL.md                 # The complete documentation of the project for agents and humans
+└── README.md                 # Quick-start development commands and information for humans
 ```
 
 ### Key Source Files
