@@ -23,8 +23,8 @@ async function makeAuthenticatedRequest(url) {
 async function seedFeeds(feeds) {
 	for (const feed of feeds) {
 		await env.DB.prepare(
-			`INSERT INTO feeds (id, hostname, type, title, xml_url, html_url, no_crawl, description, last_build_date, score, consecutive_failure_count)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO feeds (id, hostname, type, title, xml_url, html_url, no_crawl, description, last_build_date, score, consecutive_failure_count, featured)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 			.bind(
 				feed.id,
@@ -37,7 +37,8 @@ async function seedFeeds(feeds) {
 				feed.description ?? null,
 				feed.last_build_date ?? null,
 				feed.score ?? null,
-				feed.consecutive_failure_count ?? 0
+				feed.consecutive_failure_count ?? 0,
+				feed.featured ?? 0
 			)
 			.run();
 	}
@@ -1839,6 +1840,40 @@ describe('Feed detail page', () => {
 		const body = await response.text();
 		expect(body).toContain('No crawl activity recorded.');
 	});
+
+	it('GET /feeds/:feedId shows "Feature" button and toggle-featured form for non-featured feed', async () => {
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('action="/api/feeds/feed-1/toggle-featured"');
+		expect(body).toContain('>Feature<');
+		expect(body).not.toContain('class="featured-badge"');
+	});
+
+	it('GET /feeds/:feedId shows "Featured" badge and "Unfeature" button for a featured feed', async () => {
+		await clearFeeds();
+		await seedFeeds([{
+			id: 'feed-1',
+			hostname: 'example.com',
+			title: 'Example Feed',
+			html_url: 'https://example.com',
+			xml_url: 'https://example.com/feed.xml',
+			featured: 1,
+		}]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/feeds/feed-1');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('class="featured-badge"');
+		expect(body).toContain('>Featured<');
+		expect(body).toContain('>Unfeature<');
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -2977,5 +3012,178 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		expect(body).toContain('href="https://news.example.com/articles/test.html"');
+	});
+
+	// 15. Featured feeds appear in a separate section above regular groups
+	it('renders featured feed articles in a distinct "Featured" section above regular groups', async () => {
+		await seedFeeds([
+			{ id: 'feed-feat', hostname: 'featured.example.com', title: 'Featured Feed', xml_url: 'https://featured.example.com/feed', featured: 1 },
+			{ id: 'feed-reg', hostname: 'regular.example.com', title: 'Regular Feed', xml_url: 'https://regular.example.com/feed' },
+		]);
+		await seedArticles([
+			{ id: 'art-feat-1', feed_id: 'feed-feat', title: 'Featured Article', published: '2026-11-01', added: '2026-11-01' },
+			{ id: 'art-reg-1', feed_id: 'feed-reg', title: 'Regular Article', published: '2026-11-01', added: '2026-11-01' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-11-01');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		expect(body).toContain('class="reader-featured"');
+		expect(body).toContain('reader-featured-heading');
+		expect(body).toContain('reader-feed-group-featured');
+		expect(body).toContain('Featured Article');
+		expect(body).toContain('Regular Article');
+		// Featured section appears before the regular article
+		expect(body.indexOf('reader-featured')).toBeLessThan(body.indexOf('Regular Article'));
+	});
+
+	// 16. Non-featured feeds do not appear in the featured section
+	it('does not render a featured section when no feeds are featured', async () => {
+		await seedFeeds([
+			{ id: 'feed-nofeat', hostname: 'nofeat.example.com', title: 'No Featured Feed', xml_url: 'https://nofeat.example.com/feed' },
+		]);
+		await seedArticles([
+			{ id: 'art-nofeat-1', feed_id: 'feed-nofeat', title: 'Normal Article', published: '2026-11-02', added: '2026-11-02' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-11-02');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		expect(body).not.toContain('class="reader-featured"');
+		expect(body).not.toContain('reader-feed-group-featured');
+		expect(body).toContain('Normal Article');
+	});
+
+	// 17. Featured section omitted when featured feeds have no articles for the day
+	it('omits featured section when featured feeds have no articles on that day', async () => {
+		await seedFeeds([
+			{ id: 'feed-feat-empty', hostname: 'feat-empty.example.com', title: 'Featured Empty', xml_url: 'https://feat-empty.example.com/feed', featured: 1 },
+			{ id: 'feed-has-arts', hostname: 'has.example.com', title: 'Has Articles', xml_url: 'https://has.example.com/feed' },
+		]);
+		await seedArticles([
+			{ id: 'art-feat-other-day', feed_id: 'feed-feat-empty', title: 'Wrong Day Featured', published: '2026-11-05', added: '2026-11-05' },
+			{ id: 'art-has-1', feed_id: 'feed-has-arts', title: 'Correct Day Article', published: '2026-11-03', added: '2026-11-03' },
+		]);
+
+		const request = await makeAuthenticatedRequest('http://example.com/reader?date=2026-11-03');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+
+		expect(body).not.toContain('class="reader-featured"');
+		expect(body).toContain('Correct Day Article');
+		expect(body).not.toContain('Wrong Day Featured');
+	});
+});
+
+// ---------------------------------------------------------------------------
+describe('Toggle featured endpoint', () => {
+	beforeEach(async () => {
+		await clearFeeds();
+	});
+
+	it('POST /api/feeds/:feedId/toggle-featured flips featured from 0 to 1 and redirects', async () => {
+		await seedFeeds([
+			{ id: 'feed-tf1', hostname: 'tf.example.com', title: 'Toggle Feed', xml_url: 'https://tf.example.com/feed', featured: 0 },
+		]);
+
+		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+		const request = new Request('http://example.com/api/feeds/feed-tf1/toggle-featured', {
+			method: 'POST',
+			headers: {
+				Cookie: `feed_reader_session=${sessionId}`,
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
+			body: 'returnTo=/feeds/feed-tf1',
+			redirect: 'manual',
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds/feed-tf1');
+
+		const feed = await env.DB.prepare('SELECT featured FROM feeds WHERE id = ?').bind('feed-tf1').first();
+		expect(feed.featured).toBe(1);
+	});
+
+	it('POST /api/feeds/:feedId/toggle-featured flips featured from 1 to 0', async () => {
+		await seedFeeds([
+			{ id: 'feed-tf2', hostname: 'tf2.example.com', title: 'Featured Toggle Feed', xml_url: 'https://tf2.example.com/feed', featured: 1 },
+		]);
+
+		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+		const request = new Request('http://example.com/api/feeds/feed-tf2/toggle-featured', {
+			method: 'POST',
+			headers: {
+				Cookie: `feed_reader_session=${sessionId}`,
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
+			body: 'returnTo=/feeds/feed-tf2',
+			redirect: 'manual',
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(303);
+		const feed = await env.DB.prepare('SELECT featured FROM feeds WHERE id = ?').bind('feed-tf2').first();
+		expect(feed.featured).toBe(0);
+	});
+
+	it('POST /api/feeds/unknown-id/toggle-featured returns 404', async () => {
+		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+		const request = new Request('http://example.com/api/feeds/nonexistent/toggle-featured', {
+			method: 'POST',
+			headers: {
+				Cookie: `feed_reader_session=${sessionId}`,
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
+			body: 'returnTo=/feeds',
+			redirect: 'manual',
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(404);
+	});
+
+	it('POST /api/feeds/:feedId/toggle-featured with invalid returnTo falls back to /feeds', async () => {
+		await seedFeeds([
+			{ id: 'feed-tf3', hostname: 'tf3.example.com', title: 'Fallback Feed', xml_url: 'https://tf3.example.com/feed' },
+		]);
+
+		const sessionId = await createSession(env.SESSIONS, 'allowed@example.com', 86400);
+		const request = new Request('http://example.com/api/feeds/feed-tf3/toggle-featured', {
+			method: 'POST',
+			headers: {
+				Cookie: `feed_reader_session=${sessionId}`,
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
+			body: 'returnTo=https://evil.com',
+			redirect: 'manual',
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/feeds');
 	});
 });

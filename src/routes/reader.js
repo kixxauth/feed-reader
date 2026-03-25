@@ -6,7 +6,10 @@
  *
  * The effective date of an article is `published` when present, else `added`.
  * Disabled feeds (no_crawl = 1) are excluded.
- * Articles are grouped by feed and each group is sorted by article count descending,
+ *
+ * Articles are grouped by feed. Groups from feeds marked as featured (featured = 1)
+ * are rendered in a visually distinct "Featured" section at the top. Remaining groups
+ * appear below. Within each section, groups are sorted by article count descending,
  * with feed title ascending as a tie-breaker. Within a group, articles are newest-first.
  *
  * Auth: protected by authMiddleware in src/index.js (no PUBLIC_PATHS entry).
@@ -40,18 +43,26 @@ export async function handleReader(c) {
 				feedId: row.feed_id,
 				feedTitle: row.feed_title,
 				feedBaseUrl: row.feed_html_url || row.feed_xml_url,
+				featured: row.feed_featured === 1,
 				articles: [],
 			});
 		}
 		groupMap.get(row.feed_id).articles.push(row);
 	}
 
-	// Sort groups: most articles first, feed title ascending as tie-breaker.
-	const groups = Array.from(groupMap.values()).sort((a, b) => {
+	const sortGroups = (a, b) => {
 		const countDiff = b.articles.length - a.articles.length;
 		if (countDiff !== 0) return countDiff;
 		return a.feedTitle.localeCompare(b.feedTitle);
-	});
+	};
+
+	const featuredGroups = [];
+	const regularGroups = [];
+	for (const group of groupMap.values()) {
+		(group.featured ? featuredGroups : regularGroups).push(group);
+	}
+	featuredGroups.sort(sortGroups);
+	regularGroups.sort(sortGroups);
 
 	const prevDate = getPreviousDate(selectedDate);
 	const nextDate = getNextDate(selectedDate);
@@ -67,49 +78,66 @@ export async function handleReader(c) {
   <a href="/reader?date=${escapeHtml(nextDate)}" class="button-link">Next</a>
 </div>`;
 
-	let bodyContent;
+	function renderFeedGroup(group, extraClass) {
+		const articleCount = group.articles.length;
+		const sectionClass = extraClass
+			? `reader-feed-group ${extraClass}`
+			: 'reader-feed-group';
 
-	if (groups.length === 0) {
-		bodyContent = `<p class="reader-empty-state">No articles found for this date.</p>`;
-	} else {
-		const groupsHtml = groups
-			.map((group) => {
-				const articleCount = group.articles.length;
-				const articlesHtml = group.articles
-					.map((article) => {
-						// Determine effective date for display (published preferred, added fallback)
-						const effectiveDateStr = article.article_published || article.article_added;
-						const formattedDate = effectiveDateStr
-							? new Date(effectiveDateStr).toLocaleDateString('en-US', {
-									year: 'numeric',
-									month: 'short',
-									day: 'numeric',
-									timeZone: 'UTC',
-								})
-							: 'Date unknown';
+		const articlesHtml = group.articles
+			.map((article) => {
+				const effectiveDateStr = article.article_published || article.article_added;
+				const formattedDate = effectiveDateStr
+					? new Date(effectiveDateStr).toLocaleDateString('en-US', {
+							year: 'numeric',
+							month: 'short',
+							day: 'numeric',
+							timeZone: 'UTC',
+						})
+					: 'Date unknown';
 
-						const resolvedLink = resolveArticleUrl(article.article_link, group.feedBaseUrl);
-						const titleHtml = resolvedLink
-							? `<a href="${escapeHtml(resolvedLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.article_title ?? '(no title)')}</a>`
-							: `<span>${escapeHtml(article.article_title ?? '(no title)')}</span>`;
+				const resolvedLink = resolveArticleUrl(article.article_link, group.feedBaseUrl);
+				const titleHtml = resolvedLink
+					? `<a href="${escapeHtml(resolvedLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.article_title ?? '(no title)')}</a>`
+					: `<span>${escapeHtml(article.article_title ?? '(no title)')}</span>`;
 
-						return `<li class="article-item">
+				return `<li class="article-item">
         ${titleHtml}
         <span class="article-date">${formattedDate}</span>
       </li>`;
-					})
-					.join('\n');
+			})
+			.join('\n');
 
-				return `<section class="reader-feed-group">
+		return `<section class="${sectionClass}">
   <h2 class="reader-feed-group-header"><a href="/feeds/${escapeHtml(group.feedId)}">${escapeHtml(group.feedTitle)}</a> <span class="reader-article-count">(${articleCount})</span></h2>
   <ul class="reader-article-list article-list">
 ${articlesHtml}
   </ul>
 </section>`;
-			})
+	}
+
+	let bodyContent;
+	const hasAny = featuredGroups.length > 0 || regularGroups.length > 0;
+
+	if (!hasAny) {
+		bodyContent = `<p class="reader-empty-state">No articles found for this date.</p>`;
+	} else {
+		let featuredHtml = '';
+		if (featuredGroups.length > 0) {
+			const inner = featuredGroups
+				.map((g) => renderFeedGroup(g, 'reader-feed-group-featured'))
+				.join('\n');
+			featuredHtml = `<div class="reader-featured">
+  <h2 class="reader-featured-heading">Featured</h2>
+${inner}
+</div>`;
+		}
+
+		const regularHtml = regularGroups
+			.map((g) => renderFeedGroup(g))
 			.join('\n');
 
-		bodyContent = groupsHtml;
+		bodyContent = featuredHtml + regularHtml;
 	}
 
 	const content = `<main>

@@ -27,6 +27,7 @@
  *   getRecentActivityForFeed   — returns the most recent N crawl_run_details rows for a feed, joined with crawl_runs
  *   getCrawlRunDetailByFeed    — returns one crawl_run_details row for a crawl run + feed pair
  *   getDailyReaderArticles     — returns flat joined rows for all enabled-feed articles on a given UTC day
+ *   updateFeedFeatured         — sets featured to a given value for a feed (toggle endpoint)
  */
 
 import { canonicalizeHttpUrl, normalizeUrlForComparison } from './feed-utils.js';
@@ -502,6 +503,9 @@ export async function getCrawlRunDetailByFeed(db, crawlRunId, feedId) {
  * @returns {Promise<Array<{
  *   feed_id: string,
  *   feed_title: string,
+ *   feed_html_url: string|null,
+ *   feed_xml_url: string|null,
+ *   feed_featured: number,
  *   article_id: string,
  *   article_title: string|null,
  *   article_link: string|null,
@@ -516,6 +520,7 @@ export async function getDailyReaderArticles(db, selectedDate) {
 			feeds.title AS feed_title,
 			feeds.html_url AS feed_html_url,
 			feeds.xml_url AS feed_xml_url,
+			feeds.featured AS feed_featured,
 			articles.id AS article_id,
 			articles.title AS article_title,
 			articles.link AS article_link,
@@ -529,4 +534,19 @@ export async function getDailyReaderArticles(db, selectedDate) {
 	`;
 	const result = await db.prepare(sql).bind(selectedDate).all();
 	return result.results;
+}
+
+/**
+ * Set featured to the given value for a feed (used by the toggle endpoint).
+ *
+ * @param {D1Database} db - The D1 database binding
+ * @param {string} feedId - The feed id
+ * @param {number} featured - The new featured value (0 or 1)
+ * @returns {Promise<D1Result>}
+ */
+export async function updateFeedFeatured(db, feedId, featured) {
+	return db
+		.prepare('UPDATE feeds SET featured = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+		.bind(featured, feedId)
+		.run();
 }

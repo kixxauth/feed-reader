@@ -124,6 +124,9 @@ async function processFeed(feed, startedAt, db) {
 			continue;
 		}
 
+		// Resolve relative article links (e.g. "/path/to/post") to absolute URLs
+		// before storage. Render-time resolution in reader.js and articles.js
+		// provides a safety net for articles already stored with relative links.
 		const resolvedLink = resolveArticleUrl(article.link, feed.html_url || feed.xml_url);
 
 		const result = await insertArticle(db, {

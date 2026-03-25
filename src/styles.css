@@ -561,6 +561,41 @@ header nav[aria-label="Account"] a:focus-visible {
     margin: 0;
 }
 
+/* Featured section wrapper — visually distinct block at the top of the reader */
+.reader-featured {
+    border: 1px solid hsla(45, 50%, 50%, 0.4);
+    border-radius: 6px;
+    padding: 0.75rem 1rem 0.25rem;
+    margin-bottom: 1rem;
+    background: hsla(45, 30%, 14%, 1);
+}
+
+.reader-featured-heading {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+    margin: 0 0 0.25rem;
+}
+
+/* Override the top border/margin on the first feed group inside the featured block */
+.reader-featured .reader-feed-group:first-of-type {
+    border-top: none;
+    margin-top: 0.5rem;
+}
+
+/* Featured badge on the feed detail page */
+.featured-badge {
+    display: inline-block;
+    border-radius: 3px;
+    font-size: 0.75em;
+    padding: 0.1em 0.45em;
+    vertical-align: middle;
+    background: hsla(45, 40%, 25%, 1);
+    color: hsla(45, 50%, 80%, 1);
+}
+
 /* Empty state message */
 .reader-empty-state {
     opacity: 0.7;

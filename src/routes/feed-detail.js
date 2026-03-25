@@ -2,9 +2,10 @@
  * GET /feeds/:feedId — Feed detail page.
  *
  * Displays feed metadata, recent crawl activity, and admin actions for a
- * single feed. Preserves list pagination context (listPage, disabled) in the
- * "Back to Feeds" link and the toggle-crawl returnTo value so the user is
- * returned to the correct list position after toggling crawl status.
+ * single feed. Admin actions include toggling crawl status and toggling
+ * featured status. Preserves list pagination context (listPage, disabled)
+ * in the "Back to Feeds" link and the returnTo values for both toggle forms
+ * so the user is returned to the correct list position after toggling.
  *
  * Auth: protected by authMiddleware in src/index.js (no PUBLIC_PATHS entry).
  */
@@ -61,6 +62,13 @@ export async function handleFeedDetail(c) {
 		? `<span class="crawl-status-badge crawl-status-disabled">Disabled</span>`
 		: `<span class="crawl-status-badge crawl-status-enabled">Crawling</span>`;
 	const toggleLabel = noCrawl ? 'Enable' : 'Disable';
+
+	// Featured badge and toggle label
+	const isFeatured = feed.featured === 1;
+	const featuredBadge = isFeatured
+		? `<span class="featured-badge">Featured</span>`
+		: '';
+	const featuredToggleLabel = isFeatured ? 'Unfeature' : 'Feature';
 
 	// Format a date value for display
 	function formatDate(value) {
@@ -121,7 +129,7 @@ export async function handleFeedDetail(c) {
 		: '';
 
 	const content = `<main class="feed-detail">
-  <h1>${escapeHtml(feed.title)}</h1>
+  <h1>${escapeHtml(feed.title)}${featuredBadge ? ` ${featuredBadge}` : ''}</h1>
 
   <section class="feed-meta">
     <div class="feed-meta-row"><span class="feed-meta-label">Hostname:</span> <span>${escapeHtml(feed.hostname)}</span></div>${htmlUrlRow}${xmlUrlRow}${descriptionRow}
@@ -145,6 +153,10 @@ export async function handleFeedDetail(c) {
     <form method="POST" action="/api/feeds/${escapeHtml(feedId)}/toggle-crawl" class="toggle-crawl-form">
       <input type="hidden" name="returnTo" value="${escapeHtml(selfHref)}">
       <button type="submit">${toggleLabel}</button>
+    </form>
+    <form method="POST" action="/api/feeds/${escapeHtml(feedId)}/toggle-featured" class="toggle-featured-form">
+      <input type="hidden" name="returnTo" value="${escapeHtml(selfHref)}">
+      <button type="submit">${featuredToggleLabel}</button>
     </form>
   </div>
 </main>`;

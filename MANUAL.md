@@ -47,7 +47,7 @@ All incoming HTTP requests pass through `authMiddleware` (registered globally). 
 
 **Public paths** (no auth required): `/login`, `/auth/start`, `/auth/callback`, `/logout`, `/logged-out`
 
-**Protected paths** (auth required): `/`, `/feeds`, `/feeds/add`, `/feeds/:feedId`, `/feeds/:feedId/articles`, `/api/feeds/add`, `/api/feeds/:feedId/toggle-crawl`, `/crawl-history`, `/crawl-history/:crawlRunId`, `/reader`
+**Protected paths** (auth required): `/`, `/feeds`, `/feeds/add`, `/feeds/:feedId`, `/feeds/:feedId/articles`, `/api/feeds/add`, `/api/feeds/:feedId/toggle-crawl`, `/api/feeds/:feedId/toggle-featured`, `/crawl-history`, `/crawl-history/:crawlRunId`, `/reader`
 
 ### Scheduled Job
 
@@ -67,7 +67,7 @@ Styles are defined in `src/styles.css` and imported as a text module (via a Wran
 
 ### `feeds` table
 
-Created by migration `0001_create_feeds_table.sql`. Column `consecutive_failure_count` added by `0003_add_failure_count_to_feeds.sql`. A normalized unique index on `LOWER(TRIM(xml_url))` is added by `0006_add_unique_index_on_feed_xml_url.sql` to prevent duplicate feeds regardless of case or surrounding whitespace.
+Created by migration `0001_create_feeds_table.sql`. Column `consecutive_failure_count` added by `0003_add_failure_count_to_feeds.sql`. A normalized unique index on `LOWER(TRIM(xml_url))` is added by `0006_add_unique_index_on_feed_xml_url.sql` to prevent duplicate feeds regardless of case or surrounding whitespace. Column `featured` added by `0008_add_featured_to_feeds.sql`.
 
 ```sql
 CREATE TABLE feeds (
@@ -83,7 +83,8 @@ CREATE TABLE feeds (
   score                     REAL,
   created_at                TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at                TEXT DEFAULT CURRENT_TIMESTAMP,
-  consecutive_failure_count INTEGER DEFAULT 0
+  consecutive_failure_count INTEGER DEFAULT 0,
+  featured                  INTEGER DEFAULT 0
 );
 CREATE INDEX idx_feeds_hostname ON feeds(hostname);
 ```
@@ -102,6 +103,7 @@ CREATE INDEX idx_feeds_hostname ON feeds(hostname);
 | `score` | Numeric quality/ranking score |
 | `created_at`, `updated_at` | Auto-managed timestamps |
 | `consecutive_failure_count` | Count of consecutive crawl failures; reset to 0 on success or when crawling is re-enabled |
+| `featured` | `1` to feature in the reader view; `0` for normal display |
 
 ### `articles` table
 
@@ -299,9 +301,10 @@ Protected. Displays metadata and recent activity for a single feed.
 - Returns **404** if the feed ID is not found.
 - **Feed metadata**: hostname, website URL (`html_url`), feed URL (`xml_url`), description (each shown only when not null).
 - **Admin metadata**: crawl status badge, consecutive failure count, last build date, score, created/updated timestamps.
+- **Featured badge**: When a feed has `featured = 1`, a "Featured" badge is displayed next to the feed title.
 - **Recent crawl activity**: The last 5 crawl run detail rows for this feed, showing status, date, articles added, and any error message.
-- **Actions**: View Articles link to `/feeds/{feedId}/articles`, Visit Website link (when `html_url` is present), Back to Feeds link, and an Enable/Disable toggle button.
-- **List context preservation**: The detail page receives `listPage` and `disabled` query params from the feeds list so that Back to Feeds and the toggle returnTo both return the user to the correct list position and filter state.
+- **Actions**: View Articles link to `/feeds/{feedId}/articles`, Visit Website link (when `html_url` is present), Back to Feeds link, an Enable/Disable crawl toggle button, and a Feature/Unfeature toggle button.
+- **List context preservation**: The detail page receives `listPage` and `disabled` query params from the feeds list so that Back to Feeds and the toggle returnTo values both return the user to the correct list position and filter state.
 
 ### Add Feed (`/feeds/add`)
 
@@ -335,6 +338,7 @@ Protected. Displays articles for a single feed.
 - **Date display**: `Mar 23, 2026` format (UTC locale); NULL dates show "Date unknown"
 - **Empty state** (no articles at all): "No articles available for this feed" — filter form hidden
 - **Empty state** (filter active, no matches): Filter form shown + "No articles match the current filter"
+- **Article link resolution**: Relative article URLs are resolved to absolute URLs using the feed's `html_url` (preferred) or `xml_url` as the base.
 
 ### Reader (`/reader`)
 
@@ -345,10 +349,12 @@ Protected. Cross-feed daily article view — shows all articles across enabled f
 - **Effective-date rule**: An article's effective date is `published` when non-null, otherwise `added`. Both `DATE('2026-03-24')` and `DATE('2026-03-24T02:00:00.000Z')` resolve to `2026-03-24` via SQLite's `DATE()` function, so the rule works for both date-only and full ISO timestamp formats.
 - **UTC interpretation**: All date selection and display uses UTC to avoid off-by-one day errors near midnight.
 - **Disabled feeds excluded**: Feeds with `no_crawl = 1` are excluded from the query.
-- **Grouping**: Articles are grouped by feed. Groups are sorted by article count descending, with feed title ascending as a tie-breaker. Within each group, articles are ordered newest-first.
+- **Featured section**: Articles from feeds with `featured = 1` are grouped into a visually distinct "Featured" section at the top of the page. The section is omitted entirely when no featured feeds have articles for the selected day. Featured feeds are marked on the feed detail page via the Feature/Unfeature toggle.
+- **Grouping**: Within both the featured and regular sections, articles are grouped by feed. Groups are sorted by article count descending, with feed title ascending as a tie-breaker. Within each group, articles are ordered newest-first.
 - **No pagination**: All matching articles for the day are shown. A single day across all feeds is expected to be a manageable count.
 - **Date navigation**: The page includes Previous/Next day links (always explicit `?date=` values) and a date picker form that submits `GET /reader`.
 - **Empty state**: If no articles match the selected day, a "No articles found for this date" message is shown. Date navigation controls remain visible.
+- **Article link resolution**: Article URLs that are relative paths (e.g. `/2017/09/article.html`) are resolved to absolute URLs using the feed's `html_url` (preferred) or `xml_url` as the base.
 - **XSS protection**: All feed titles, article titles, and article links are HTML-escaped before rendering.
 
 ### Crawl History (`/crawl-history`)
@@ -366,6 +372,14 @@ Protected. Flips the `no_crawl` flag for a feed:
 - Enabling: sets `no_crawl = 0` **and** resets `consecutive_failure_count = 0` (fresh start)
 
 Redirects to the `returnTo` form field value (defaulting to `/feeds`) with 303 on success. Returns 404 if feed not found.
+
+### Toggle Featured (`POST /api/feeds/:feedId/toggle-featured`)
+
+Protected. Flips the `featured` flag for a feed:
+- `featured = 0` → sets `featured = 1` (feed articles appear in the reader's Featured section)
+- `featured = 1` → sets `featured = 0` (feed articles appear in the regular section)
+
+Also updates `updated_at` to the current timestamp. Redirects to the `returnTo` form field value (defaulting to `/feeds`) with 303 on success. Returns 404 if feed not found.
 
 ### Logout (`/logout`)
 
@@ -698,6 +712,8 @@ await clearArticles();
 - Articles page: pagination, date filtering, empty states, NULL published dates, XSS escaping
 - Crawl history: list page, detail page, 404 for unknown run
 - Toggle crawl: enables/disables feed, resets failure count on enable, 404 for unknown feed
+- Toggle featured: features/unfeatures feed, 404 for unknown feed, returnTo validation
+- Reader page: featured section rendering, featured section omission, article URL resolution
 - Logout: session deleted, cookie cleared
 
 ---
@@ -760,7 +776,7 @@ npx wrangler d1 execute feed-reader-db --remote --command "UPDATE feeds SET no_c
 
 ### Adding a New Database Migration
 
-1. Create a new file in `migrations/` following the naming pattern: `0007_description.sql` (or the next unused number)
+1. Create a new file in `migrations/` following the naming pattern: `0009_description.sql` (or the next unused number)
 2. Write your `CREATE TABLE`, `ALTER TABLE`, or index SQL
 3. Apply locally: `npx wrangler d1 migrations apply feed-reader-db --local`
 4. Run tests: `npm test`
@@ -802,14 +818,17 @@ feed-reader/
 │   │   ├── reader.js         # GET /reader (daily cross-feed reader view)
 │   │   └── api/
 │   │       ├── add-feed.js           # POST /api/feeds/add
-│   │       └── toggle-feed-crawl.js  # POST /api/feeds/:feedId/toggle-crawl
+│   │       ├── toggle-feed-crawl.js  # POST /api/feeds/:feedId/toggle-crawl
+│   │       └── toggle-featured.js    # POST /api/feeds/:feedId/toggle-featured
 ├── migrations/
 │   ├── 0001_create_feeds_table.sql
 │   ├── 0002_create_articles_table.sql
 │   ├── 0003_add_failure_count_to_feeds.sql
 │   ├── 0004_create_crawl_runs_table.sql
 │   ├── 0005_create_crawl_run_details_table.sql
-│   └── 0006_add_unique_index_on_feed_xml_url.sql
+│   ├── 0006_add_unique_index_on_feed_xml_url.sql
+│   ├── 0007_add_effective_date_index_on_articles.sql
+│   └── 0008_add_featured_to_feeds.sql
 ├── scripts/
 │   ├── import-feeds.js           # CLI: bulk import feeds from SQLite
 │   ├── import-articles.js        # CLI: bulk import articles from SQLite
@@ -835,20 +854,21 @@ feed-reader/
 | File | Responsibility |
 |---|---|
 | `src/index.js` | Mounts middleware and all routes; exports the Hono app and `scheduled` handler |
-| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeeds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed` |
+| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeeds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed`, `getDailyReaderArticles`, `updateFeedFeatured` |
 | `src/crawl.js` | `performCrawl`, `performFeedCrawl` — scheduled and immediate crawl entry points sharing the same history/failure logic |
 | `src/feed-discovery.js` | Add-feed URL validation, website scraping, candidate discovery, and user-facing validation messages |
-| `src/feed-utils.js` | URL canonicalization, duplicate-comparison normalization, and hostname derivation |
+| `src/feed-utils.js` | URL canonicalization, duplicate-comparison normalization, hostname derivation, and article URL resolution |
 | `src/parser.js` | `parseFeedXml` (article extraction) and `parseFeedPreview` (feed-level metadata for the add-feed flow) |
 | `src/routes/add-feed.js` | Add-feed page renderer and hidden-state helpers for the SSR multi-step flow |
 | `src/routes/api/add-feed.js` | Server-side add-feed workflow, duplicate handling, feed creation, and immediate crawl scheduling |
-| `src/routes/feed-detail.js` | Feed detail page: metadata, admin info, recent crawl activity, and enable/disable toggle |
+| `src/routes/feed-detail.js` | Feed detail page: metadata, admin info, recent crawl activity, enable/disable toggle, and feature/unfeature toggle |
 | `src/auth/middleware.js` | Auth gate for all requests; session validation and throttled refresh |
 | `src/auth/session.js` | `createSession`, `getSession`, `refreshSession`, `deleteSession`, cookie helpers |
 | `src/auth/github.js` | `getAuthorizationUrl`, `exchangeCodeForToken`, `getUserEmails` |
 | `src/routes/articles.js` | Articles page: date filtering, pagination, empty states, XSS-safe rendering |
 | `src/routes/crawl-history.js` | Crawl history list and per-run detail pages |
 | `src/routes/api/toggle-feed-crawl.js` | Enable/disable crawling for a single feed |
+| `src/routes/api/toggle-featured.js` | Feature/unfeature a feed for the reader view |
 
 ---
 
