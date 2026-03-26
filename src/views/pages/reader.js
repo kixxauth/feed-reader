@@ -19,25 +19,30 @@ function renderFeedGroup(group, resolveArticleUrl) {
 					day: 'numeric',
 					timeZone: 'UTC',
 				})
-			: 'Date unknown';
+			: 'Unknown';
 
 		const resolvedLink = resolveArticleUrl(article.article_link, group.feedBaseUrl);
 		const titleContent = resolvedLink
 			? html`<a href="${resolvedLink}" target="_blank" rel="noopener noreferrer">${article.article_title ?? '(no title)'}</a>`
 			: html`<span>${article.article_title ?? '(no title)'}</span>`;
 
-		return html`<li>
-        ${titleContent}
-        <span>${formattedDate}</span>
-      </li>`;
+		return html`<li class="article-item">
+        <span class="article-item__title">${titleContent}</span>
+        <span class="article-item__date">${formattedDate}</span>
+    </li>`;
 	});
 
-	return html`<section>
-  <h2><a href="/feeds/${group.feedId}">${group.feedTitle}</a> <span>(${articleCount})</span></h2>
-  <ul>
-${raw(articleItems.join('\n'))}
-  </ul>
-</section>`;
+	return html`<div class="feed-group">
+    <div class="feed-group__header">
+        <h2 class="feed-group__title">
+            <a href="/feeds/${group.feedId}">${group.feedTitle}</a>
+        </h2>
+        <span class="feed-group__count">${articleCount}</span>
+    </div>
+    <ul class="article-list feed-group__articles">
+        ${raw(articleItems.join('\n'))}
+    </ul>
+</div>`;
 }
 
 /**
@@ -64,43 +69,54 @@ export function readerPage({
 	displayDate,
 	todayUtc,
 }, resolveArticleUrl) {
-	const dateControls = html`<div>
-  <a href="/reader?date=${prevDate}">Previous</a>
-  <form method="GET" action="/reader">
-    <input type="date" name="date" value="${selectedDate}" max="${todayUtc}">
-    <button type="submit">Go</button>
-  </form>
-  <a href="/reader?date=${nextDate}">Next</a>
+	const isToday = selectedDate === todayUtc;
+
+	const nextArrowAttrs = isToday ? raw(' aria-disabled="true"') : raw('');
+
+	const dateControls = html`<div class="date-nav">
+    <a class="btn btn--ghost" href="/reader?date=${prevDate}">← Prev</a>
+    <div class="date-nav__form">
+        <form class="form-row" method="GET" action="/reader">
+            <input class="form-input form-input--date" type="date" name="date" value="${selectedDate}" max="${todayUtc}">
+            <button class="btn btn--ghost" type="submit">Go</button>
+        </form>
+    </div>
+    <a class="btn btn--ghost" href="/reader?date=${nextDate}"${nextArrowAttrs}>Next →</a>
 </div>`;
 
 	const hasAny = featuredGroups.length > 0 || regularGroups.length > 0;
 
 	let bodyContent;
 	if (!hasAny) {
-		bodyContent = html`<p>No articles found for this date.</p>`;
+		bodyContent = html`<div class="empty-state">
+    <div class="empty-state__glyph">∅</div>
+    <div class="empty-state__title">No articles</div>
+    <div class="empty-state__message">No articles were collected for this date.</div>
+</div>`;
 	} else {
 		let featuredContent = html``;
 		if (featuredGroups.length > 0) {
-			const featuredItems = featuredGroups.map((g) =>
-				renderFeedGroup(g, resolveArticleUrl)
-			);
-			featuredContent = html`<div>
-  <h2>Featured</h2>
-${raw(featuredItems.join('\n'))}
+			const featuredItems = featuredGroups.map((g) => renderFeedGroup(g, resolveArticleUrl));
+			featuredContent = html`<div class="featured-section">
+    <span class="featured-label">★ Featured</span>
+    <div class="featured-groups">
+        ${raw(featuredItems.join('\n'))}
+    </div>
 </div>`;
 		}
 
-		const regularItems = regularGroups.map((g) =>
-			renderFeedGroup(g, resolveArticleUrl)
-		);
+		const regularItems = regularGroups.map((g) => renderFeedGroup(g, resolveArticleUrl));
 		const regularContent = raw(regularItems.join('\n'));
 
 		bodyContent = html`${featuredContent}${regularContent}`;
 	}
 
 	return html`<main>
-  <h1>${displayDate}</h1>
-  ${dateControls}
-  ${bodyContent}
+    <div class="page-header">
+        <span class="page-header__eyebrow">Daily digest</span>
+        <h1 class="page-header__title">${displayDate}</h1>
+    </div>
+    ${dateControls}
+    ${bodyContent}
 </main>`;
 }

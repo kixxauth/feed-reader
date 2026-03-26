@@ -2,7 +2,6 @@ import { html, raw } from 'hono/html';
 
 /**
  * Format an ISO 8601 timestamp as a human-readable date+time string.
- * Example output: "Mar 23, 2026 02:15 AM"
  *
  * @param {string|null} isoString
  * @returns {string}
@@ -30,31 +29,42 @@ function formatDateTime(isoString) {
 export function crawlHistoryPage({ runs }) {
 	if (runs.length === 0) {
 		return html`<main>
-  <h1>Crawl History</h1>
-  <a href="/feeds">Back to Feeds</a>
-  <p>No crawl history available</p>
+    <div class="page-header">
+        <span class="page-header__eyebrow"><a class="back-link" href="/feeds">← Feeds</a></span>
+        <h1 class="page-header__title">Crawl History</h1>
+    </div>
+    <div class="empty-state">
+        <div class="empty-state__glyph">◷</div>
+        <div class="empty-state__title">No history yet</div>
+        <div class="empty-state__message">Crawl runs will appear here after the first scheduled crawl.</div>
+    </div>
 </main>`;
 	}
 
 	const items = runs.map((run) => {
 		const startedAt = formatDateTime(run.started_at);
-		return html`<li>
-    <div>
-      <span><strong>Started:</strong> ${startedAt}</span>
-      <span><strong>Feeds attempted:</strong> ${run.total_feeds_attempted}</span>
-      <span><strong>Feeds failed:</strong> ${run.total_feeds_failed}</span>
-      <span><strong>Articles added:</strong> ${run.total_articles_added}</span>
-    </div>
-    <a href="/crawl-history/${run.id}">View Details</a>
-  </li>`;
+		return html`<li class="crawl-run">
+    <span class="crawl-run__time">${startedAt}</span>
+    <span class="crawl-run__stats">
+        <span class="crawl-run__stat"><strong>${run.total_feeds_attempted}</strong> attempted</span>
+        <span class="crawl-run__stat"><strong>${run.total_feeds_failed}</strong> failed</span>
+        <span class="crawl-run__stat"><strong>${run.total_articles_added}</strong> articles added</span>
+    </span>
+    <span class="crawl-run__action">
+        <a class="btn btn--ghost btn--sm" href="/crawl-history/${run.id}">Details →</a>
+    </span>
+</li>`;
 	});
 
 	return html`<main>
-  <h1>Crawl History</h1>
-  <a href="/feeds">Back to Feeds</a>
-  <ul>
-${raw(items.join('\n'))}
-  </ul>
+    <div class="page-header">
+        <span class="page-header__eyebrow"><a class="back-link" href="/feeds">← Feeds</a></span>
+        <h1 class="page-header__title">Crawl History</h1>
+        <p class="page-header__subtitle">Scheduled crawl runs — daily at 2am UTC.</p>
+    </div>
+    <ul class="crawl-run-list">
+        ${raw(items.join('\n'))}
+    </ul>
 </main>`;
 }
 
@@ -72,69 +82,90 @@ ${raw(items.join('\n'))}
 export function crawlRunDetailPage({ run, details, failedOnly, crawlRunId }) {
 	const startedAt = formatDateTime(run.started_at);
 
-	const summary = html`<div>
-    <div>
-      <span><strong>Started:</strong> ${startedAt}</span>
-      <span><strong>Feeds attempted:</strong> ${run.total_feeds_attempted}</span>
-      <span><strong>Feeds failed:</strong> ${run.total_feeds_failed}</span>
-      <span><strong>Articles added:</strong> ${run.total_articles_added}</span>
-    </div>
-  </div>`;
-
 	const filterControl = failedOnly
-		? html`<p>Showing failed only — <a href="/crawl-history/${crawlRunId}">Show all</a></p>`
-		: html`<p><a href="/crawl-history/${crawlRunId}?failed=1">Show failed only</a></p>`;
+		? html`<div class="toolbar">
+        <span class="toolbar__filter-link toolbar__filter-link--active">Failed only</span>
+        <span class="toolbar__separator"></span>
+        <a class="toolbar__filter-link" href="/crawl-history/${crawlRunId}">Show all</a>
+    </div>`
+		: html`<div class="toolbar">
+        <span class="toolbar__filter-link toolbar__filter-link--active">All feeds</span>
+        <span class="toolbar__separator"></span>
+        <a class="toolbar__filter-link" href="/crawl-history/${crawlRunId}?failed=1">Failed only</a>
+    </div>`;
 
-	let detailRows;
+	let detailContent;
 	if (details.length === 0) {
-		if (failedOnly) {
-			detailRows = html`<p>No failed feed attempts in this crawl run. <a href="/crawl-history/${crawlRunId}">Show all</a></p>`;
-		} else {
-			detailRows = html`<p>No feed detail records for this crawl run.</p>`;
-		}
+		const emptyMsg = failedOnly
+			? html`No failed feed attempts in this run. <a class="ml-2" href="/crawl-history/${crawlRunId}">Show all</a>`
+			: html`No feed detail records for this crawl run.`;
+
+		detailContent = html`<div class="empty-state">
+    <div class="empty-state__glyph">✓</div>
+    <div class="empty-state__title">No records</div>
+    <div class="empty-state__message">${emptyMsg}</div>
+</div>`;
 	} else {
 		const rows = details.map((detail) => {
-			// Use feed title from JOIN if available; fall back to feed_id
 			const feedLabel = detail.feed_title
 				? html`<a href="/feeds/${detail.feed_id}">${detail.feed_title}</a>`
-				: html`${detail.feed_id}`;
+				: html`<span>${detail.feed_id}</span>`;
 
 			const xmlLinkHtml = detail.feed_xml_url
-				? html` <a href="${detail.feed_xml_url}" target="_blank" rel="noopener noreferrer">(XML)</a>`
+				? html`<a class="crawl-detail-item__xml-link" href="${detail.feed_xml_url}" target="_blank" rel="noopener noreferrer">[XML ↗]</a>`
 				: html``;
 
-			// Determine status display text
-			let statusText;
+			let statusBadge;
 			if (detail.status === 'auto_disabled') {
-				statusText = 'Auto-disabled';
+				statusBadge = html`<span class="badge badge--disabled">Auto-disabled</span>`;
 			} else if (detail.status === 'failed') {
-				statusText = 'Failed';
+				statusBadge = html`<span class="badge badge--error">Failed</span>`;
 			} else {
-				statusText = 'Success';
+				statusBadge = html`<span class="badge badge--success">Success</span>`;
 			}
 
 			const errorContent = detail.error_message
-				? html`<span>${detail.error_message}</span>`
+				? html`<div class="crawl-detail-item__error">${detail.error_message}</div>`
 				: html``;
 
-			return html`<li>
-      <span>${feedLabel}${xmlLinkHtml}</span>
-      <span><strong>Articles added:</strong> ${detail.articles_added}</span>
-      <span>${statusText}</span>
-      ${errorContent}
+			return html`<li class="crawl-detail-item">
+        <div style="flex:1;min-width:0;">
+            <div class="crawl-detail-item__feed">
+                ${feedLabel}${xmlLinkHtml}
+            </div>
+            ${errorContent}
+        </div>
+        <span class="crawl-detail-item__added"><strong>${detail.articles_added}</strong> added</span>
+        ${statusBadge}
     </li>`;
 		});
 
-		detailRows = html`<ul>
-${raw(rows.join('\n'))}
-  </ul>`;
+		detailContent = html`<ul class="crawl-detail-list mt-2">
+    ${raw(rows.join('\n'))}
+</ul>`;
 	}
 
 	return html`<main>
-  <h1>Crawl Run Details</h1>
-  <a href="/crawl-history">Back to Crawl History</a>
-  ${summary}
-  ${filterControl}
-  ${detailRows}
+    <div class="page-header">
+        <span class="page-header__eyebrow"><a class="back-link" href="/crawl-history">← Crawl History</a></span>
+        <h1 class="page-header__title">Crawl Run</h1>
+        <p class="page-header__subtitle">${startedAt}</p>
+    </div>
+    <div class="stat-grid mb-4">
+        <div class="stat-chip">
+            <span class="stat-chip__value">${run.total_feeds_attempted}</span>
+            <span class="stat-chip__label">Attempted</span>
+        </div>
+        <div class="stat-chip">
+            <span class="stat-chip__value">${run.total_feeds_failed}</span>
+            <span class="stat-chip__label">Failed</span>
+        </div>
+        <div class="stat-chip">
+            <span class="stat-chip__value">${run.total_articles_added}</span>
+            <span class="stat-chip__label">Articles added</span>
+        </div>
+    </div>
+    ${filterControl}
+    ${detailContent}
 </main>`;
 }

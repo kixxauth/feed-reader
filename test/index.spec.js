@@ -155,7 +155,7 @@ describe('Login page', () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.get('content-type')).toContain('text/html');
 		const body = await response.text();
-		expect(body).toContain('Login with GitHub');
+		expect(body).toContain('Continue with GitHub');
 		expect(body).toContain('href="/auth/start?next=%2F"');
 	});
 
@@ -199,7 +199,7 @@ describe('Authenticated access', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('Logout');
+		expect(body).toContain('Sign out');
 	});
 
 	it('GET / contains a link to /feeds and does not render feed data', async () => {
@@ -220,7 +220,7 @@ describe('Authenticated access', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('<h1>Feed Reader</h1>');
+		expect(body).toContain('Feed Reader');
 	});
 });
 
@@ -242,7 +242,7 @@ describe('Feeds page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('<h1>Feeds</h1>');
+		expect(body).toContain('>Feeds<');
 	});
 
 	it('GET /feeds shows disabled filter link', async () => {
@@ -265,8 +265,8 @@ describe('Feeds page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('No feeds available');
-		expect(body).not.toContain('<nav class="pagination">');
+		expect(body).toContain('No feeds yet');
+		expect(body).not.toContain('class="pagination"');
 	});
 
 	it('GET /feeds with seeded feeds shows titles and hostnames sorted by hostname', async () => {
@@ -443,7 +443,7 @@ describe('Add feed page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('<h1>Add Feed</h1>');
+		expect(body).toContain('>Add Feed<');
 		expect(body).toContain('action="/api/feeds/add"');
 		expect(body).toContain('name="url"');
 	});
@@ -526,9 +526,9 @@ describe('Articles page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('No articles available');
+		expect(body).toContain('No articles');
 		expect(body).not.toContain('<form');
-		expect(body).not.toContain('<nav class="pagination">');
+		expect(body).not.toContain('class="pagination"');
 	});
 
 	it('GET /feeds/{feedId}/articles with seeded articles shows titles and dates sorted newest first', async () => {
@@ -565,7 +565,7 @@ describe('Articles page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('Date unknown');
+		expect(body).toContain('Unknown');
 	});
 
 	it('GET /feeds/{feedId}/articles without filter returns all articles', async () => {
@@ -669,7 +669,7 @@ describe('Articles page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		const prevDisabledPos = body.indexOf('aria-disabled="true"');
-		const prevTextPos = body.indexOf('Previous');
+		const prevTextPos = body.indexOf('← Prev');
 		expect(prevDisabledPos).toBeGreaterThanOrEqual(0);
 		expect(prevDisabledPos).toBeLessThan(prevTextPos);
 	});
@@ -1051,7 +1051,7 @@ describe('Crawl history page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('No crawl history available');
+		expect(body).toContain('No history yet');
 	});
 
 	it('GET /crawl-history/:id shows per-feed details', async () => {
@@ -1147,7 +1147,7 @@ describe('Crawl history page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('Show failed only');
+		expect(body).toContain('Failed only');
 		expect(body).toContain('href="/crawl-history/run-filter-test?failed=1"');
 	});
 
@@ -1830,7 +1830,7 @@ describe('Feed detail page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('<h1>Example Feed</h1>');
+		expect(body).toContain('>Example Feed<');
 	});
 
 	it('GET /feeds/feed-1 contains the hostname', async () => {
@@ -1851,7 +1851,7 @@ describe('Feed detail page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		expect(body).toContain('href="/feeds/feed-1/articles"');
-		expect(body).toContain('View Articles');
+		expect(body).toContain('View articles');
 	});
 
 	it('GET /feeds/feed-1 contains "Back to Feeds" link to /feeds', async () => {
@@ -1862,7 +1862,7 @@ describe('Feed detail page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		expect(body).toContain('href="/feeds"');
-		expect(body).toContain('Back to Feeds');
+		expect(body).toContain('← Feeds');
 	});
 
 	it('GET /feeds/feed-1 contains the crawl toggle form with action /api/feeds/feed-1/toggle-crawl', async () => {
@@ -2002,8 +2002,8 @@ describe('Feed detail page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		expect(body).toContain('action="/api/feeds/feed-1/toggle-featured"');
-		expect(body).toContain('>Feature<');
-		expect(body).not.toContain('<span>Featured</span>');
+		expect(body).toContain('Mark as featured');
+		expect(body).not.toContain('"badge badge--featured"');
 	});
 
 	it('GET /feeds/:feedId shows "Featured" badge and "Unfeature" button for a featured feed', async () => {
@@ -2023,7 +2023,7 @@ describe('Feed detail page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('<span>Featured</span>');
+		expect(body).toContain('"badge badge--featured"');
 		expect(body).toContain('>Unfeature<');
 	});
 });
@@ -2156,7 +2156,7 @@ describe('Feeds list — disabled filter', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('Clear filter');
+		expect(body).toContain('All feeds');
 	});
 
 	it('GET /feeds shows "Show disabled only" link', async () => {
@@ -2169,7 +2169,7 @@ describe('Feeds list — disabled filter', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('Show disabled only');
+		expect(body).toContain('Disabled only');
 	});
 
 	it('Feed title on /feeds links to /feeds/:feedId (detail page), not an external URL', async () => {
@@ -2328,7 +2328,7 @@ describe('Add feed flow', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('<h1>Add Feed</h1>');
+		expect(body).toContain('>Add Feed<');
 		expect(body).toContain('name="url"');
 		expect(body).toContain('action="/api/feeds/add"');
 		expect(body).toContain('href="/feeds"');
@@ -2410,7 +2410,7 @@ describe('Add feed flow', () => {
 		const response = await worker.fetch(request, env, ctx);
 		await waitOnExecutionContext(ctx);
 		const body = await response.text();
-		expect(body).toContain('Select a Feed');
+		expect(body).toContain('Select a feed');
 		expect(body).toContain('https://example.com/feed.xml');
 		expect(body).toContain('https://example.com/atom.xml');
 	});
@@ -2520,7 +2520,7 @@ describe('Add feed flow', () => {
 		const feedsPageResponse = await worker.fetch(feedsPageRequest, env, feedsPageCtx);
 		await waitOnExecutionContext(feedsPageCtx);
 		const feedsPageBody = await feedsPageResponse.text();
-		expect(feedsPageBody).toContain('Feed added, but could not fetch articles yet.');
+		expect(feedsPageBody).toContain('Feed added, but the initial crawl failed:');
 		expect(feedsPageBody).toContain('The feed returned invalid content');
 	});
 });
@@ -2533,15 +2533,15 @@ describe('Global navigation', () => {
 	function assertNavPresent(body) {
 		// Three primary nav labels
 		expect(body).toContain('Home');
-		expect(body).toContain('Feeds List');
-		expect(body).toContain('Crawl History');
+		expect(body).toContain('Feeds');
+		expect(body).toContain('History');
 		// Correct href targets
 		expect(body).toContain('href="/"');
 		expect(body).toContain('href="/feeds"');
 		expect(body).toContain('href="/crawl-history"');
 		// Logout control
 		expect(body).toContain('href="/logout"');
-		expect(body).toContain('Logout');
+		expect(body).toContain('Sign out');
 	}
 
 	// Helper: assert exactly one aria-current="page" in the nav, on the expected link
@@ -2553,9 +2553,10 @@ describe('Global navigation', () => {
 		expect(body).toMatch(activePattern);
 	}
 
-	// Helper: assert no aria-current="page" in the nav
+	// Helper: assert no aria-current="page" in the nav (as an HTML attribute, not a CSS selector)
 	function assertNoActiveLink(body) {
-		expect(body).not.toContain('aria-current="page"');
+		// CSS selectors use [aria-current="page"] but HTML attributes use aria-current="page" with a space before
+		expect(body).not.toMatch(/<[^>]+ aria-current="page"/);
 	}
 
 	describe('Home page (GET /)', () => {
@@ -2658,7 +2659,7 @@ describe('Global navigation', () => {
 			const response = await worker.fetch(request, env, ctx);
 			await waitOnExecutionContext(ctx);
 			const body = await response.text();
-			expect(body).toContain('<h1>Add Feed</h1>');
+			expect(body).toContain('>Add Feed<');
 			expect(body).toContain('name="url"');
 		});
 	});
@@ -2698,7 +2699,7 @@ describe('Global navigation', () => {
 			const response = await worker.fetch(request, env, ctx);
 			await waitOnExecutionContext(ctx);
 			const body = await response.text();
-			expect(body).toContain('Back to Feeds');
+			expect(body).toContain('← Feeds');
 		});
 	});
 
@@ -2780,7 +2781,7 @@ describe('Global navigation', () => {
 			const response = await worker.fetch(request, env, ctx);
 			await waitOnExecutionContext(ctx);
 			const body = await response.text();
-			expect(body).toContain('Back to Feeds');
+			expect(body).toContain('← Feeds');
 		});
 	});
 
@@ -2825,7 +2826,7 @@ describe('Global navigation', () => {
 			const response = await worker.fetch(request, env, ctx);
 			await waitOnExecutionContext(ctx);
 			const body = await response.text();
-			expect(body).toContain('Back to Crawl History');
+			expect(body).toContain('← Crawl History');
 		});
 	});
 
@@ -2994,7 +2995,7 @@ describe('Reader page', () => {
 		expect(body).toContain('href="/feeds/feed-gb"');
 		expect(body).toContain('Alpha Article');
 		expect(body).toContain('Beta Article');
-		expect(body).toContain('<section>');
+		expect(body).toContain('class="feed-group"');
 	});
 
 	// 8. Group ordering — feed with more articles appears first
@@ -3062,11 +3063,11 @@ describe('Reader page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('No articles found for this date');
+		expect(body).toContain('No articles were collected for this date');
 		// Date controls still present in empty state
 		expect(body).toContain('type="date"');
 		// No feed-group section elements in the empty state
-		expect(body).not.toContain('<section>');
+		expect(body).not.toContain('class="article-list feed-group__articles"');
 	});
 
 	// 12. Nav link — Reader link present in header
@@ -3078,7 +3079,7 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		expect(body).toContain('href="/reader"');
-		expect(body).toContain('>Reader<');
+		expect(body).toContain('>Reader');
 	});
 
 	// Active nav link on /reader
@@ -3183,11 +3184,11 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		expect(body).toContain('<h2>Featured</h2>');
+		expect(body).toContain('class="featured-section"');
 		expect(body).toContain('Featured Article');
 		expect(body).toContain('Regular Article');
 		// Featured section appears before the regular article
-		expect(body.indexOf('Featured</h2>')).toBeLessThan(body.indexOf('Regular Article'));
+		expect(body.indexOf('class="featured-section"')).toBeLessThan(body.indexOf('Regular Article'));
 	});
 
 	// 16. Non-featured feeds do not appear in the featured section
@@ -3206,7 +3207,7 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		expect(body).not.toContain('<h2>Featured</h2>');
+		expect(body).not.toContain('class="featured-section"');
 		expect(body).toContain('Normal Article');
 	});
 

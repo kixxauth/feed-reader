@@ -7,14 +7,21 @@ import { html } from 'hono/html';
  * @returns {import('hono/html').HtmlEscapedString}
  */
 export function notFoundPage(message = 'Page not found.') {
-	return html`<main><h1>Not Found</h1><p>${message}</p></main>`;
+	return html`<main>
+    <div class="page-header">
+        <span class="page-header__eyebrow">404</span>
+        <h1 class="page-header__title">Not Found</h1>
+    </div>
+    <div class="empty-state">
+        <div class="empty-state__glyph">⊘</div>
+        <div class="empty-state__title">Page not found</div>
+        <div class="empty-state__message">${message}</div>
+    </div>
+</main>`;
 }
 
 /**
  * Renders a notice banner.
- *
- * NOTE: This function is not currently called by any view. It exists as a shared
- * primitive for future use. If it remains unused, consider removing it.
  *
  * @param {'error'|'success'|'warning'|'info'} type - The notice type (controls CSS class).
  * @param {import('hono/html').HtmlEscapedString} contentHtml - Pre-built HtmlEscapedString
@@ -22,5 +29,8 @@ export function notFoundPage(message = 'Page not found.') {
  * @returns {import('hono/html').HtmlEscapedString}
  */
 export function noticeBanner(type, contentHtml) {
-	return html`<div>${contentHtml}</div>`;
+	const cssClass = type === 'success' ? 'notice notice--success'
+		: type === 'error' ? 'notice notice--error'
+		: 'notice notice--info';
+	return html`<div class="${cssClass}">${contentHtml}</div>`;
 }

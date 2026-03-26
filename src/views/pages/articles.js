@@ -9,12 +9,16 @@ import { html, raw } from 'hono/html';
  * @returns {import('hono/html').HtmlEscapedString}
  */
 function buildFilterForm(feedId, fromDate, toDate) {
-	return html`<form method="GET">
-    <input type="date" name="from" value="${fromDate ?? ''}">
-    <input type="date" name="to" value="${toDate ?? ''}">
-    <button type="submit">Filter</button>
-    <a href="/feeds/${feedId}/articles">Clear</a>
-  </form>`;
+	return html`<div class="toolbar">
+    <form class="form-row" method="GET">
+        <label class="form-label" style="margin:0;" for="filter-from">From</label>
+        <input class="form-input form-input--date" id="filter-from" type="date" name="from" value="${fromDate ?? ''}">
+        <label class="form-label" style="margin:0;" for="filter-to">To</label>
+        <input class="form-input form-input--date" id="filter-to" type="date" name="to" value="${toDate ?? ''}">
+        <button class="btn btn--primary btn--sm" type="submit">Filter</button>
+        <a class="btn btn--ghost btn--sm" href="/feeds/${feedId}/articles">Clear</a>
+    </form>
+</div>`;
 }
 
 /**
@@ -51,26 +55,35 @@ export function articlesPage({
 	backToFeedsHref,
 	filterQs,
 }, resolveArticleUrl) {
+	const pageHeader = html`<div class="page-header">
+    <span class="page-header__eyebrow"><a class="back-link" href="${backToFeedsHref}">← Feeds</a></span>
+    <h1 class="page-header__title" style="font-family:var(--font-serif);font-weight:400;font-size:22px;">${feed.title}</h1>
+    <p class="page-header__subtitle">${feed.hostname}</p>
+</div>`;
+
 	if (total === 0 && !filtersActive) {
-		// Empty state: no articles at all for this feed
 		return html`<main>
-  <h1>${feed.title}</h1>
-  <a href="${backToFeedsHref}">Back to Feeds</a>
-  <p>No articles available for this feed</p>
+    ${pageHeader}
+    <div class="empty-state">
+        <div class="empty-state__glyph">∅</div>
+        <div class="empty-state__title">No articles</div>
+        <div class="empty-state__message">No articles have been collected for this feed yet.</div>
+    </div>
 </main>`;
 	}
 
 	if (total === 0 && filtersActive) {
-		// Empty state: filters active but no matches — show filter form so user can clear
 		return html`<main>
-  <h1>${feed.title}</h1>
-  <a href="${backToFeedsHref}">Back to Feeds</a>
-  ${buildFilterForm(feedId, fromDate, toDate)}
-  <p>No articles match the current filter</p>
+    ${pageHeader}
+    ${buildFilterForm(feedId, fromDate, toDate)}
+    <div class="empty-state">
+        <div class="empty-state__glyph">⊘</div>
+        <div class="empty-state__title">No matches</div>
+        <div class="empty-state__message">No articles match the current date filter.</div>
+    </div>
 </main>`;
 	}
 
-	// Articles found — show filter form, article list, and pagination
 	const items = articles.map((article) => {
 		const resolvedLink = resolveArticleUrl(article.link, feedBaseUrl);
 		const titleContent = resolvedLink
@@ -84,33 +97,32 @@ export function articlesPage({
 					day: 'numeric',
 					timeZone: 'UTC',
 				})
-			: 'Date unknown';
+			: 'Unknown';
 
-		return html`<li>
-    ${titleContent}
-    <span>${formattedDate}</span>
-  </li>`;
+		return html`<li class="article-item">
+    <span class="article-item__title">${titleContent}</span>
+    <span class="article-item__date">${formattedDate}</span>
+</li>`;
 	});
 
 	const prevLink = page === 1
-		? html`<a aria-disabled="true">Previous</a>`
-		: html`<a href="/feeds/${feedId}/articles?${raw(filterQs ? filterQs + '&' : '')}page=${page - 1}">Previous</a>`;
+		? html`<a class="pagination__link" aria-disabled="true">← Prev</a>`
+		: html`<a class="pagination__link" href="/feeds/${feedId}/articles?${raw(filterQs ? filterQs + '&' : '')}page=${page - 1}">← Prev</a>`;
 
 	const nextLink = page === totalPages
-		? html`<a aria-disabled="true">Next</a>`
-		: html`<a href="/feeds/${feedId}/articles?${raw(filterQs ? filterQs + '&' : '')}page=${page + 1}">Next</a>`;
+		? html`<a class="pagination__link" aria-disabled="true">Next →</a>`
+		: html`<a class="pagination__link" href="/feeds/${feedId}/articles?${raw(filterQs ? filterQs + '&' : '')}page=${page + 1}">Next →</a>`;
 
 	return html`<main>
-  <h1>${feed.title}</h1>
-  <a href="${backToFeedsHref}">Back to Feeds</a>
-  ${buildFilterForm(feedId, fromDate, toDate)}
-  <ul>
-${raw(items.join('\n'))}
-  </ul>
-  <nav>
-    ${prevLink}
-    <span>Page ${page} of ${totalPages}</span>
-    ${nextLink}
-  </nav>
+    ${pageHeader}
+    ${buildFilterForm(feedId, fromDate, toDate)}
+    <ul class="article-list mt-2">
+        ${raw(items.join('\n'))}
+    </ul>
+    <nav class="pagination" aria-label="Article list pagination">
+        ${prevLink}
+        <span class="pagination__info">Page ${page} of ${totalPages} &nbsp;·&nbsp; ${total} articles</span>
+        ${nextLink}
+    </nav>
 </main>`;
 }
