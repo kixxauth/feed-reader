@@ -464,7 +464,7 @@ describe('Add feed page', () => {
 		});
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('notice-error');
+		expect(body).toContain('Please enter a valid URL');
 	});
 });
 
@@ -753,7 +753,7 @@ describe('Articles page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('<span class="article-title">No Link Article</span>');
+		expect(body).toContain('<span>No Link Article</span>');
 		// Should not have an anchor wrapping the title
 		expect(body).not.toMatch(/href="[^"]*"[^>]*>No Link Article/);
 	});
@@ -1100,8 +1100,8 @@ describe('Crawl history page', () => {
 		// Articles added count should appear
 		expect(body).toContain('5');
 		// Status indicators should appear
-		expect(body).toContain('success');
-		expect(body).toContain('failed');
+		expect(body).toContain('Success');
+		expect(body).toContain('Failed');
 		// Error message for failed feed
 		expect(body).toContain('Could not reach the feed URL (network error or server unavailable)');
 		// Fallback to feed_id for deleted feed (no link — detail page would 404)
@@ -1444,7 +1444,6 @@ describe('Reader page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('class="reader-heading"');
 		// The heading should contain "March 25, 2026" (the display date for 2026-03-25)
 		expect(body).toContain('March 25, 2026');
 	});
@@ -2004,7 +2003,7 @@ describe('Feed detail page', () => {
 		const body = await response.text();
 		expect(body).toContain('action="/api/feeds/feed-1/toggle-featured"');
 		expect(body).toContain('>Feature<');
-		expect(body).not.toContain('class="featured-badge"');
+		expect(body).not.toContain('<span>Featured</span>');
 	});
 
 	it('GET /feeds/:feedId shows "Featured" badge and "Unfeature" button for a featured feed', async () => {
@@ -2024,8 +2023,7 @@ describe('Feed detail page', () => {
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(200);
 		const body = await response.text();
-		expect(body).toContain('class="featured-badge"');
-		expect(body).toContain('>Featured<');
+		expect(body).toContain('<span>Featured</span>');
 		expect(body).toContain('>Unfeature<');
 	});
 });
@@ -2743,7 +2741,7 @@ describe('Global navigation', () => {
 			await waitOnExecutionContext(ctx);
 			const body = await response.text();
 			// The filter form is rendered when articles are present
-			expect(body).toContain('filter-form');
+			expect(body).toContain('type="date"');
 		});
 	});
 
@@ -2874,7 +2872,6 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 		// Date controls should always be present
-		expect(body).toContain('class="reader-date-controls"');
 		expect(body).toContain('type="date"');
 	});
 
@@ -2997,7 +2994,7 @@ describe('Reader page', () => {
 		expect(body).toContain('href="/feeds/feed-gb"');
 		expect(body).toContain('Alpha Article');
 		expect(body).toContain('Beta Article');
-		expect(body).toContain('reader-feed-group');
+		expect(body).toContain('<section>');
 	});
 
 	// 8. Group ordering — feed with more articles appears first
@@ -3067,9 +3064,9 @@ describe('Reader page', () => {
 		const body = await response.text();
 		expect(body).toContain('No articles found for this date');
 		// Date controls still present in empty state
-		expect(body).toContain('class="reader-date-controls"');
-		// No feed-group section elements (the CSS class appears in the stylesheet, so check for the element tag)
-		expect(body).not.toContain('<section class="reader-feed-group">');
+		expect(body).toContain('type="date"');
+		// No feed-group section elements in the empty state
+		expect(body).not.toContain('<section>');
 	});
 
 	// 12. Nav link — Reader link present in header
@@ -3186,13 +3183,11 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		expect(body).toContain('class="reader-featured"');
-		expect(body).toContain('reader-featured-heading');
-		expect(body).toContain('reader-feed-group-featured');
+		expect(body).toContain('<h2>Featured</h2>');
 		expect(body).toContain('Featured Article');
 		expect(body).toContain('Regular Article');
 		// Featured section appears before the regular article
-		expect(body.indexOf('reader-featured')).toBeLessThan(body.indexOf('Regular Article'));
+		expect(body.indexOf('Featured</h2>')).toBeLessThan(body.indexOf('Regular Article'));
 	});
 
 	// 16. Non-featured feeds do not appear in the featured section
@@ -3211,8 +3206,7 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		expect(body).not.toContain('class="reader-featured"');
-		expect(body).not.toContain('reader-feed-group-featured');
+		expect(body).not.toContain('<h2>Featured</h2>');
 		expect(body).toContain('Normal Article');
 	});
 
@@ -3234,7 +3228,7 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		expect(body).not.toContain('class="reader-featured"');
+		expect(body).not.toContain('<h2>Featured</h2>');
 		expect(body).toContain('Correct Day Article');
 		expect(body).not.toContain('Wrong Day Featured');
 	});

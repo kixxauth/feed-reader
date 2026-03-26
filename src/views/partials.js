@@ -22,5 +22,5 @@ export function notFoundPage(message = 'Page not found.') {
  * @returns {import('hono/html').HtmlEscapedString}
  */
 export function noticeBanner(type, contentHtml) {
-	return html`<div class="notice notice-${type}">${contentHtml}</div>`;
+	return html`<div>${contentHtml}</div>`;
 }

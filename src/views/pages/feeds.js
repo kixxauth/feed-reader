@@ -15,7 +15,7 @@ import { html, raw } from 'hono/html';
  */
 export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml }) {
 	const disabledParam = disabled ? '?disabled=1' : '';
-	const addFeedButton = html`<p class="page-actions"><a class="button-link" href="/feeds/add">Add Feed</a></p>`;
+	const addFeedButton = html`<p><a href="/feeds/add">Add Feed</a></p>`;
 	// Normalize null banner to empty html
 	const banner = bannerHtml ?? html``;
 
@@ -33,8 +33,8 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
 	}
 
 	const filterControl = disabled
-		? html`<p class="feed-filter">Showing disabled feeds only — <a href="/feeds">Clear filter</a></p>`
-		: html`<p class="feed-filter"><a href="/feeds?disabled=1">Show disabled only</a></p>`;
+		? html`<p>Showing disabled feeds only — <a href="/feeds">Clear filter</a></p>`
+		: html`<p><a href="/feeds?disabled=1">Show disabled only</a></p>`;
 
 	// items is an Array<HtmlEscapedString>. Array.join() coerces each element to a plain
 	// string via toString() — safe because HtmlEscapedString values are already escaped.
@@ -42,8 +42,8 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
 	const items = feeds.map((feed) => {
 		const noCrawl = feed.no_crawl;
 		const crawlBadge = noCrawl
-			? html`<span class="crawl-status-badge crawl-status-disabled">Disabled</span>`
-			: html`<span class="crawl-status-badge crawl-status-enabled">Crawling</span>`;
+			? html`<span>Disabled</span>`
+			: html`<span>Crawling</span>`;
 		const toggleButtonLabel = noCrawl ? 'Enable' : 'Disable';
 
 		// Build detail href with optional listPage and disabled params
@@ -61,12 +61,12 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
 			? html`<a href="${feed.html_url}" target="_blank" rel="noopener noreferrer">Visit Website</a>`
 			: html``;
 
-		return html`<li class="feed-item">
+		return html`<li>
     <a href="${detailHref}">${feed.title}</a>
-    <span class="feed-hostname">${feed.hostname}</span>
+    <span>${feed.hostname}</span>
     ${crawlBadge}
     ${visitWebsiteLink}
-    <form method="POST" action="/api/feeds/${feed.id}/toggle-crawl" class="toggle-crawl-form">
+    <form method="POST" action="/api/feeds/${feed.id}/toggle-crawl">
       <input type="hidden" name="returnTo" value="/feeds${raw(disabledParam)}">
       <button type="submit">${toggleButtonLabel}</button>
     </form>
@@ -96,10 +96,10 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
   ${banner}
   ${addFeedButton}
   ${filterControl}
-  <ul class="feed-list">
+  <ul>
 ${raw(items.join('\n'))}
   </ul>
-  <nav class="pagination">
+  <nav>
     ${prevLink}
     <span>Page ${page} of ${totalPages}</span>
     ${nextLink}
@@ -115,19 +115,19 @@ ${raw(items.join('\n'))}
  * @returns {import('hono/html').HtmlEscapedString}
  */
 export function addFeedBanner(detail) {
-	const successNotice = html`<div class="notice notice-success">Feed added successfully.</div>`;
+	const successNotice = html`<div>Feed added successfully.</div>`;
 
 	if (!detail) {
 		return html`${successNotice}
-  <div class="notice notice-info">Feed added. Initial crawl in progress.</div>`;
+  <div>Feed added. Initial crawl in progress.</div>`;
 	}
 
 	if (detail.status === 'failed' || detail.status === 'auto_disabled') {
 		const reason = detail.error_message || 'Unknown error';
 		return html`${successNotice}
-  <div class="notice notice-warning">Feed added, but could not fetch articles yet. Reason: ${reason}. Articles will be fetched at the next scheduled crawl (2am UTC).</div>`;
+  <div>Feed added, but could not fetch articles yet. Reason: ${reason}. Articles will be fetched at the next scheduled crawl (2am UTC).</div>`;
 	}
 
 	return html`${successNotice}
-  <div class="notice notice-info">Feed added. Initial crawl completed.</div>`;
+  <div>Feed added. Initial crawl completed.</div>`;
 }

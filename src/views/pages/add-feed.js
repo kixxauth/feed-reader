@@ -7,7 +7,7 @@ import { html, raw } from 'hono/html';
  * @returns {import('hono/html').HtmlEscapedString}
  */
 function buildUrlForm(enteredUrl) {
-	return html`<form method="POST" action="/api/feeds/add" class="add-feed-form">
+	return html`<form method="POST" action="/api/feeds/add">
     <input type="hidden" name="intent" value="submit">
     <label for="feed-url">URL</label>
     <input id="feed-url" name="url" type="url" value="${enteredUrl}" required>
@@ -29,10 +29,10 @@ function buildSelectionSection(selectionState, serializedSelectionState) {
 			? html`<p>${candidate.description}</p>`
 			: html``;
 
-		return html`<li class="feed-candidate-card">
-    <div class="feed-candidate-meta">
+		return html`<li>
+    <div>
       <strong>${title}</strong>
-      <span class="feed-candidate-type">${candidate.type.toUpperCase()}</span>
+      <span>${candidate.type.toUpperCase()}</span>
       ${description}
       <code>${candidate.xmlUrl}</code>
     </div>
@@ -46,9 +46,9 @@ function buildSelectionSection(selectionState, serializedSelectionState) {
 	});
 
 	return html`
-  <section class="add-feed-selection">
+  <section>
     <h2>Select a Feed</h2>
-    <ul class="feed-candidate-list">
+    <ul>
 ${raw(items.join('\n'))}
     </ul>
     <form method="GET" action="/feeds/add">
@@ -71,12 +71,12 @@ function buildConfirmationSection(confirmationState, previewState) {
 
 	const descriptionRow = candidate.description
 		? html`
-    <div class="feed-meta-row"><span class="feed-meta-label">Description:</span> <span>${candidate.description}</span></div>`
+    <div><span>Description:</span> <span>${candidate.description}</span></div>`
 		: html``;
 
 	const websiteRow = candidate.htmlUrl
 		? html`
-    <div class="feed-meta-row"><span class="feed-meta-label">Website:</span> <a href="${candidate.htmlUrl}" target="_blank" rel="noopener noreferrer">${candidate.htmlUrl}</a></div>`
+    <div><span>Website:</span> <a href="${candidate.htmlUrl}" target="_blank" rel="noopener noreferrer">${candidate.htmlUrl}</a></div>`
 		: html``;
 
 	let backControl;
@@ -94,14 +94,14 @@ function buildConfirmationSection(confirmationState, previewState) {
 	}
 
 	return html`
-  <section class="add-feed-confirmation">
+  <section>
     <h2>Confirm Feed</h2>
-    <div class="feed-meta">
-      <div class="feed-meta-row"><span class="feed-meta-label">Title:</span> <span>${title}</span></div>
-      <div class="feed-meta-row"><span class="feed-meta-label">Feed type:</span> <span>${candidate.type.toUpperCase()}</span></div>${descriptionRow}${websiteRow}
-      <div class="feed-meta-row"><span class="feed-meta-label">Feed URL:</span> <code>${candidate.xmlUrl}</code></div>
+    <div>
+      <div><span>Title:</span> <span>${title}</span></div>
+      <div><span>Feed type:</span> <span>${candidate.type.toUpperCase()}</span></div>${descriptionRow}${websiteRow}
+      <div><span>Feed URL:</span> <code>${candidate.xmlUrl}</code></div>
     </div>
-    <div class="feed-actions">
+    <div>
       <form method="POST" action="/api/feeds/add">
         <input type="hidden" name="intent" value="confirm">
         <input type="hidden" name="previewState" value="${previewState}">
@@ -140,9 +140,9 @@ export function addFeedPage(state) {
 	let alertHtml;
 	if (state.errorHtml) {
 		// state.errorHtml is already an HtmlEscapedString — nesting it is safe (no double-escaping)
-		alertHtml = html`<div class="notice notice-error">${state.errorHtml}</div>`;
+		alertHtml = html`<div>${state.errorHtml}</div>`;
 	} else if (state.errorMessage) {
-		alertHtml = html`<div class="notice notice-error">${state.errorMessage}</div>`;
+		alertHtml = html`<div>${state.errorMessage}</div>`;
 	} else {
 		alertHtml = html``;
 	}
@@ -150,9 +150,9 @@ export function addFeedPage(state) {
 	let fallbackSection = html``;
 	if (state.showFallbackInput) {
 		fallbackSection = html`
-  <section class="add-feed-fallback">
+  <section>
     <h2>Try a Direct Feed URL</h2>
-    <form method="POST" action="/api/feeds/add" class="add-feed-form">
+    <form method="POST" action="/api/feeds/add">
       <input type="hidden" name="intent" value="fallback">
       <input type="hidden" name="sourceUrl" value="${enteredUrl}">
       <label for="fallback-url">Feed URL</label>
@@ -172,7 +172,7 @@ export function addFeedPage(state) {
 		confirmationSection = buildConfirmationSection(confirmationState, state.previewState ?? '');
 	}
 
-	return html`<main class="add-feed-page">
+	return html`<main>
   <h1>Add Feed</h1>
   ${alertHtml}
   ${buildUrlForm(enteredUrl)}

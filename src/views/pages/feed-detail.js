@@ -32,29 +32,29 @@ export function feedDetailPage({ feed, recentActivity, feedId, listHref, selfHre
 	// Crawl badge and toggle label
 	const noCrawl = feed.no_crawl;
 	const crawlBadge = noCrawl
-		? html`<span class="crawl-status-badge crawl-status-disabled">Disabled</span>`
-		: html`<span class="crawl-status-badge crawl-status-enabled">Crawling</span>`;
+		? html`<span>Disabled</span>`
+		: html`<span>Crawling</span>`;
 	const toggleLabel = noCrawl ? 'Enable' : 'Disable';
 
 	// Featured badge and toggle label
 	const isFeatured = feed.featured === 1;
 	const featuredBadge = isFeatured
-		? html`<span class="featured-badge">Featured</span>`
+		? html`<span>Featured</span>`
 		: html``;
 	const featuredToggleLabel = isFeatured ? 'Unfeature' : 'Feature';
 
 	// Feed meta rows (conditional)
 	const htmlUrlRow = feed.html_url
 		? html`
-    <div class="feed-meta-row"><span class="feed-meta-label">Website:</span> <a href="${feed.html_url}" target="_blank" rel="noopener noreferrer">${feed.html_url}</a></div>`
+    <div><span>Website:</span> <a href="${feed.html_url}" target="_blank" rel="noopener noreferrer">${feed.html_url}</a></div>`
 		: html``;
 	const xmlUrlRow = feed.xml_url
 		? html`
-    <div class="feed-meta-row"><span class="feed-meta-label">Feed URL:</span> <a href="${feed.xml_url}" target="_blank" rel="noopener noreferrer">${feed.xml_url}</a></div>`
+    <div><span>Feed URL:</span> <a href="${feed.xml_url}" target="_blank" rel="noopener noreferrer">${feed.xml_url}</a></div>`
 		: html``;
 	const descriptionRow = feed.description
 		? html`
-    <div class="feed-meta-row"><span class="feed-meta-label">Description:</span> <span>${feed.description}</span></div>`
+    <div><span>Description:</span> <span>${feed.description}</span></div>`
 		: html``;
 
 	// Admin meta values
@@ -69,20 +69,19 @@ export function feedDetailPage({ feed, recentActivity, feedId, listHref, selfHre
 		activityContent = html`<p>No crawl activity recorded.</p>`;
 	} else {
 		const items = recentActivity.map((item) => {
-			const statusClass = `status-${item.status}`;
 			const startedAt = formatDate(item.started_at);
 			const errorContent = item.error_message
 				? html`
       <span>${item.error_message}</span>`
 				: html``;
-			return html`<li class="recent-activity-item">
-      <span class="${statusClass}">${item.status}</span>
+			return html`<li>
+      <span>${item.status}</span>
       <span>${startedAt}</span>
       <span>${item.articles_added} added</span>${errorContent}
     </li>`;
 		});
 
-		activityContent = html`<ul class="recent-activity-list">
+		activityContent = html`<ul>
     ${raw(items.join('\n'))}
   </ul>`;
 	}
@@ -98,33 +97,33 @@ export function feedDetailPage({ feed, recentActivity, feedId, listHref, selfHre
 		? html`${feed.title} ${featuredBadge}`
 		: html`${feed.title}`;
 
-	return html`<main class="feed-detail">
+	return html`<main>
   <h1>${titleContent}</h1>
 
-  <section class="feed-meta">
-    <div class="feed-meta-row"><span class="feed-meta-label">Hostname:</span> <span>${feed.hostname}</span></div>${htmlUrlRow}${xmlUrlRow}${descriptionRow}
+  <section>
+    <div><span>Hostname:</span> <span>${feed.hostname}</span></div>${htmlUrlRow}${xmlUrlRow}${descriptionRow}
   </section>
 
-  <section class="feed-admin-meta">
-    <div class="feed-meta-row"><span class="feed-meta-label">Crawl status:</span> ${crawlBadge}</div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Consecutive failures:</span> <span>${feed.consecutive_failure_count}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Last build date:</span> <span>${lastBuildDate}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Score:</span> <span>${score}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Created:</span> <span>${createdAt}</span></div>
-    <div class="feed-meta-row"><span class="feed-meta-label">Updated:</span> <span>${updatedAt}</span></div>
+  <section>
+    <div><span>Crawl status:</span> ${crawlBadge}</div>
+    <div><span>Consecutive failures:</span> <span>${feed.consecutive_failure_count}</span></div>
+    <div><span>Last build date:</span> <span>${lastBuildDate}</span></div>
+    <div><span>Score:</span> <span>${score}</span></div>
+    <div><span>Created:</span> <span>${createdAt}</span></div>
+    <div><span>Updated:</span> <span>${updatedAt}</span></div>
   </section>
 
   <h2>Recent Activity</h2>
   ${activityContent}
 
-  <div class="feed-actions">
+  <div>
     <a href="/feeds/${feedId}/articles${contextParams}">View Articles</a>${visitWebsiteLink}
     <a href="${listHref}">Back to Feeds</a>
-    <form method="POST" action="/api/feeds/${feedId}/toggle-crawl" class="toggle-crawl-form">
+    <form method="POST" action="/api/feeds/${feedId}/toggle-crawl">
       <input type="hidden" name="returnTo" value="${selfHref}">
       <button type="submit">${toggleLabel}</button>
     </form>
-    <form method="POST" action="/api/feeds/${feedId}/toggle-featured" class="toggle-featured-form">
+    <form method="POST" action="/api/feeds/${feedId}/toggle-featured">
       <input type="hidden" name="returnTo" value="${selfHref}">
       <button type="submit">${featuredToggleLabel}</button>
     </form>

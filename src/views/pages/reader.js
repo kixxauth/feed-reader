@@ -4,15 +4,11 @@ import { html, raw } from 'hono/html';
  * Renders a feed group section for the reader.
  *
  * @param {object} group - Feed group with articles.
- * @param {string|null} extraClass - Optional extra CSS class for the section.
  * @param {Function} resolveArticleUrl - Function to resolve article URLs.
  * @returns {import('hono/html').HtmlEscapedString}
  */
-function renderFeedGroup(group, extraClass, resolveArticleUrl) {
+function renderFeedGroup(group, resolveArticleUrl) {
 	const articleCount = group.articles.length;
-	const sectionClass = extraClass
-		? `reader-feed-group ${extraClass}`
-		: 'reader-feed-group';
 
 	const articleItems = group.articles.map((article) => {
 		const effectiveDateStr = article.article_published || article.article_added;
@@ -30,15 +26,15 @@ function renderFeedGroup(group, extraClass, resolveArticleUrl) {
 			? html`<a href="${resolvedLink}" target="_blank" rel="noopener noreferrer">${article.article_title ?? '(no title)'}</a>`
 			: html`<span>${article.article_title ?? '(no title)'}</span>`;
 
-		return html`<li class="article-item">
+		return html`<li>
         ${titleContent}
-        <span class="article-date">${formattedDate}</span>
+        <span>${formattedDate}</span>
       </li>`;
 	});
 
-	return html`<section class="${sectionClass}">
-  <h2 class="reader-feed-group-header"><a href="/feeds/${group.feedId}">${group.feedTitle}</a> <span class="reader-article-count">(${articleCount})</span></h2>
-  <ul class="reader-article-list article-list">
+	return html`<section>
+  <h2><a href="/feeds/${group.feedId}">${group.feedTitle}</a> <span>(${articleCount})</span></h2>
+  <ul>
 ${raw(articleItems.join('\n'))}
   </ul>
 </section>`;
@@ -68,34 +64,34 @@ export function readerPage({
 	displayDate,
 	todayUtc,
 }, resolveArticleUrl) {
-	const dateControls = html`<div class="reader-date-controls">
-  <a href="/reader?date=${prevDate}" class="button-link">Previous</a>
+	const dateControls = html`<div>
+  <a href="/reader?date=${prevDate}">Previous</a>
   <form method="GET" action="/reader">
     <input type="date" name="date" value="${selectedDate}" max="${todayUtc}">
     <button type="submit">Go</button>
   </form>
-  <a href="/reader?date=${nextDate}" class="button-link">Next</a>
+  <a href="/reader?date=${nextDate}">Next</a>
 </div>`;
 
 	const hasAny = featuredGroups.length > 0 || regularGroups.length > 0;
 
 	let bodyContent;
 	if (!hasAny) {
-		bodyContent = html`<p class="reader-empty-state">No articles found for this date.</p>`;
+		bodyContent = html`<p>No articles found for this date.</p>`;
 	} else {
 		let featuredContent = html``;
 		if (featuredGroups.length > 0) {
 			const featuredItems = featuredGroups.map((g) =>
-				renderFeedGroup(g, 'reader-feed-group-featured', resolveArticleUrl)
+				renderFeedGroup(g, resolveArticleUrl)
 			);
-			featuredContent = html`<div class="reader-featured">
-  <h2 class="reader-featured-heading">Featured</h2>
+			featuredContent = html`<div>
+  <h2>Featured</h2>
 ${raw(featuredItems.join('\n'))}
 </div>`;
 		}
 
 		const regularItems = regularGroups.map((g) =>
-			renderFeedGroup(g, null, resolveArticleUrl)
+			renderFeedGroup(g, resolveArticleUrl)
 		);
 		const regularContent = raw(regularItems.join('\n'));
 
@@ -103,7 +99,7 @@ ${raw(featuredItems.join('\n'))}
 	}
 
 	return html`<main>
-  <h1 class="reader-heading">${displayDate}</h1>
+  <h1>${displayDate}</h1>
   ${dateControls}
   ${bodyContent}
 </main>`;

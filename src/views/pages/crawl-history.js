@@ -38,12 +38,12 @@ export function crawlHistoryPage({ runs }) {
 
 	const items = runs.map((run) => {
 		const startedAt = formatDateTime(run.started_at);
-		return html`<li class="crawl-run-summary">
-    <div class="crawl-run-stats">
-      <span class="crawl-run-stat"><strong>Started:</strong> ${startedAt}</span>
-      <span class="crawl-run-stat"><strong>Feeds attempted:</strong> ${run.total_feeds_attempted}</span>
-      <span class="crawl-run-stat"><strong>Feeds failed:</strong> ${run.total_feeds_failed}</span>
-      <span class="crawl-run-stat"><strong>Articles added:</strong> ${run.total_articles_added}</span>
+		return html`<li>
+    <div>
+      <span><strong>Started:</strong> ${startedAt}</span>
+      <span><strong>Feeds attempted:</strong> ${run.total_feeds_attempted}</span>
+      <span><strong>Feeds failed:</strong> ${run.total_feeds_failed}</span>
+      <span><strong>Articles added:</strong> ${run.total_articles_added}</span>
     </div>
     <a href="/crawl-history/${run.id}">View Details</a>
   </li>`;
@@ -52,7 +52,7 @@ export function crawlHistoryPage({ runs }) {
 	return html`<main>
   <h1>Crawl History</h1>
   <a href="/feeds">Back to Feeds</a>
-  <ul class="crawl-run-list">
+  <ul>
 ${raw(items.join('\n'))}
   </ul>
 </main>`;
@@ -72,18 +72,18 @@ ${raw(items.join('\n'))}
 export function crawlRunDetailPage({ run, details, failedOnly, crawlRunId }) {
 	const startedAt = formatDateTime(run.started_at);
 
-	const summary = html`<div class="crawl-run-summary">
-    <div class="crawl-run-stats">
-      <span class="crawl-run-stat"><strong>Started:</strong> ${startedAt}</span>
-      <span class="crawl-run-stat"><strong>Feeds attempted:</strong> ${run.total_feeds_attempted}</span>
-      <span class="crawl-run-stat"><strong>Feeds failed:</strong> ${run.total_feeds_failed}</span>
-      <span class="crawl-run-stat"><strong>Articles added:</strong> ${run.total_articles_added}</span>
+	const summary = html`<div>
+    <div>
+      <span><strong>Started:</strong> ${startedAt}</span>
+      <span><strong>Feeds attempted:</strong> ${run.total_feeds_attempted}</span>
+      <span><strong>Feeds failed:</strong> ${run.total_feeds_failed}</span>
+      <span><strong>Articles added:</strong> ${run.total_articles_added}</span>
     </div>
   </div>`;
 
 	const filterControl = failedOnly
-		? html`<p class="feed-filter">Showing failed only — <a href="/crawl-history/${crawlRunId}">Show all</a></p>`
-		: html`<p class="feed-filter"><a href="/crawl-history/${crawlRunId}?failed=1">Show failed only</a></p>`;
+		? html`<p>Showing failed only — <a href="/crawl-history/${crawlRunId}">Show all</a></p>`
+		: html`<p><a href="/crawl-history/${crawlRunId}?failed=1">Show failed only</a></p>`;
 
 	let detailRows;
 	if (details.length === 0) {
@@ -103,33 +103,29 @@ export function crawlRunDetailPage({ run, details, failedOnly, crawlRunId }) {
 				? html` <a href="${detail.feed_xml_url}" target="_blank" rel="noopener noreferrer">(XML)</a>`
 				: html``;
 
-			// Determine status badge CSS class and display text
-			let statusClass;
+			// Determine status display text
 			let statusText;
 			if (detail.status === 'auto_disabled') {
-				statusClass = 'status-auto-disabled';
 				statusText = 'Auto-disabled';
 			} else if (detail.status === 'failed') {
-				statusClass = 'status-failed';
 				statusText = 'Failed';
 			} else {
-				statusClass = 'status-success';
 				statusText = 'Success';
 			}
 
 			const errorContent = detail.error_message
-				? html`<span class="crawl-detail-error">${detail.error_message}</span>`
+				? html`<span>${detail.error_message}</span>`
 				: html``;
 
-			return html`<li class="crawl-detail-row">
-      <span class="crawl-detail-feed">${feedLabel}${xmlLinkHtml}</span>
-      <span class="crawl-detail-articles"><strong>Articles added:</strong> ${detail.articles_added}</span>
-      <span class="crawl-detail-status ${statusClass}">${statusText}</span>
+			return html`<li>
+      <span>${feedLabel}${xmlLinkHtml}</span>
+      <span><strong>Articles added:</strong> ${detail.articles_added}</span>
+      <span>${statusText}</span>
       ${errorContent}
     </li>`;
 		});
 
-		detailRows = html`<ul class="crawl-detail-list">
+		detailRows = html`<ul>
 ${raw(rows.join('\n'))}
   </ul>`;
 	}

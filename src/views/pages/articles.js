@@ -9,7 +9,7 @@ import { html, raw } from 'hono/html';
  * @returns {import('hono/html').HtmlEscapedString}
  */
 function buildFilterForm(feedId, fromDate, toDate) {
-	return html`<form method="GET" class="filter-form">
+	return html`<form method="GET">
     <input type="date" name="from" value="${fromDate ?? ''}">
     <input type="date" name="to" value="${toDate ?? ''}">
     <button type="submit">Filter</button>
@@ -75,7 +75,7 @@ export function articlesPage({
 		const resolvedLink = resolveArticleUrl(article.link, feedBaseUrl);
 		const titleContent = resolvedLink
 			? html`<a href="${resolvedLink}" target="_blank" rel="noopener noreferrer">${article.title}</a>`
-			: html`<span class="article-title">${article.title}</span>`;
+			: html`<span>${article.title}</span>`;
 
 		const formattedDate = article.published
 			? new Date(article.published).toLocaleDateString('en-US', {
@@ -86,9 +86,9 @@ export function articlesPage({
 				})
 			: 'Date unknown';
 
-		return html`<li class="article-item">
+		return html`<li>
     ${titleContent}
-    <span class="article-date">${formattedDate}</span>
+    <span>${formattedDate}</span>
   </li>`;
 	});
 
@@ -104,10 +104,10 @@ export function articlesPage({
   <h1>${feed.title}</h1>
   <a href="${backToFeedsHref}">Back to Feeds</a>
   ${buildFilterForm(feedId, fromDate, toDate)}
-  <ul class="article-list">
+  <ul>
 ${raw(items.join('\n'))}
   </ul>
-  <nav class="pagination">
+  <nav>
     ${prevLink}
     <span>Page ${page} of ${totalPages}</span>
     ${nextLink}

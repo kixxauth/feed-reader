@@ -31,16 +31,16 @@ export function renderLayout({ title, content, isAuthenticated = false, currentP
 		const activeSection = getActiveSection(currentPath);
 
 		const homeAttrs = activeSection === 'home'
-			? raw(' class="nav-link-active" aria-current="page"')
+			? raw(' aria-current="page"')
 			: raw('');
 		const feedsAttrs = activeSection === 'feeds'
-			? raw(' class="nav-link-active" aria-current="page"')
+			? raw(' aria-current="page"')
 			: raw('');
 		const crawlAttrs = activeSection === 'crawl-history'
-			? raw(' class="nav-link-active" aria-current="page"')
+			? raw(' aria-current="page"')
 			: raw('');
 		const readerAttrs = activeSection === 'reader'
-			? raw(' class="nav-link-active" aria-current="page"')
+			? raw(' aria-current="page"')
 			: raw('');
 
 		nav = html`<header>
