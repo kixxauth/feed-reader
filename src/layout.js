@@ -53,24 +53,30 @@ export function renderLayout({ title, content, isAuthenticated = false, currentP
                 <span class="sidebar__brand-name">Feed Reader</span>
                 <span class="sidebar__brand-rule"></span>
             </div>
-            <nav class="sidebar__nav" aria-label="Primary">
-                <a class="sidebar__nav-item" href="/"${homeAttrs}>
-                    <i class="sidebar__nav-icon">⌂</i>Home
-                </a>
-                <a class="sidebar__nav-item" href="/reader"${readerAttrs}>
-                    <i class="sidebar__nav-icon">◈</i>Reader
-                </a>
-                <a class="sidebar__nav-item" href="/feeds"${feedsAttrs}>
-                    <i class="sidebar__nav-icon">≡</i>Feeds
-                </a>
-                <a class="sidebar__nav-item" href="/crawl-history"${crawlAttrs}>
-                    <i class="sidebar__nav-icon">◷</i>History
-                </a>
-            </nav>
-            <div class="sidebar__footer">
-                <nav aria-label="Account">
-                    <a href="/logout">Sign out</a>
+            <input type="checkbox" id="sidebar-toggle" class="sidebar__toggle-input">
+            <label class="sidebar__toggle-btn" for="sidebar-toggle" aria-label="Toggle navigation">
+                <span class="sidebar__hamburger-icon"></span>
+            </label>
+            <div class="sidebar__drawer">
+                <nav class="sidebar__nav" aria-label="Primary">
+                    <a class="sidebar__nav-item" href="/"${homeAttrs}>
+                        <i class="sidebar__nav-icon">⌂</i>Home
+                    </a>
+                    <a class="sidebar__nav-item" href="/reader"${readerAttrs}>
+                        <i class="sidebar__nav-icon">◈</i>Reader
+                    </a>
+                    <a class="sidebar__nav-item" href="/feeds"${feedsAttrs}>
+                        <i class="sidebar__nav-icon">≡</i>Feeds
+                    </a>
+                    <a class="sidebar__nav-item" href="/crawl-history"${crawlAttrs}>
+                        <i class="sidebar__nav-icon">◷</i>History
+                    </a>
                 </nav>
+                <div class="sidebar__footer">
+                    <nav aria-label="Account">
+                        <a href="/logout">Sign out</a>
+                    </nav>
+                </div>
             </div>
         </aside>
         <div class="page-content">
