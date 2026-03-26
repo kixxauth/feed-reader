@@ -9,26 +9,61 @@ import { html, raw } from 'hono/html';
  *   page: number,
  *   totalPages: number,
  *   disabled: boolean,
+ *   titleSearch: string,
+ *   domainSearch: string,
  *   bannerHtml: import('hono/html').HtmlEscapedString,
  * }} params
  * @returns {import('hono/html').HtmlEscapedString}
  */
-export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml }) {
-	const disabledParam = disabled ? '?disabled=1' : '';
+export function feedsPage({ feeds, total, page, totalPages, disabled, titleSearch, domainSearch, bannerHtml }) {
 	const banner = bannerHtml ?? html``;
 
+	// Build a base query string carrying all active filters (search + disabled), no page.
+	function buildParams({ overrideDisabled, page: pageNum } = {}) {
+		const params = new URLSearchParams();
+		const isDisabled = overrideDisabled !== undefined ? overrideDisabled : disabled;
+		if (isDisabled) params.set('disabled', '1');
+		if (titleSearch) params.set('title', titleSearch);
+		if (domainSearch) params.set('domain', domainSearch);
+		if (pageNum && pageNum > 1) params.set('page', String(pageNum));
+		const qs = params.toString();
+		return qs ? `?${qs}` : '';
+	}
+
+	const disabledParam = buildParams();
+
 	const filterLink = disabled
-		? html`<a class="toolbar__filter-link" href="/feeds">All feeds</a>
+		? html`<a class="toolbar__filter-link" href="${'/feeds' + buildParams({ overrideDisabled: false })}">All feeds</a>
         <span class="toolbar__separator"></span>
         <span class="toolbar__filter-link toolbar__filter-link--active">Disabled only</span>`
 		: html`<span class="toolbar__filter-link toolbar__filter-link--active">All feeds</span>
         <span class="toolbar__separator"></span>
-        <a class="toolbar__filter-link" href="/feeds?disabled=1">Disabled only</a>`;
+        <a class="toolbar__filter-link" href="${'/feeds' + buildParams({ overrideDisabled: true })}">Disabled only</a>`;
+
+	function buildClearSearchHref() {
+		const params = new URLSearchParams();
+		if (disabled) params.set('disabled', '1');
+		const qs = params.toString();
+		return '/feeds' + (qs ? `?${qs}` : '');
+	}
+
+	const searchForm = html`<form class="toolbar__search" method="GET" action="/feeds">
+    ${disabled ? html`<input type="hidden" name="disabled" value="1">` : html``}
+    <input class="toolbar__search-input" type="search" name="title" placeholder="Search by title" value="${titleSearch}">
+    <input class="toolbar__search-input" type="search" name="domain" placeholder="Search by domain" value="${domainSearch}">
+    <button class="btn btn--ghost btn--sm" type="submit">Search</button>
+    ${titleSearch || domainSearch ? html`<a class="btn btn--ghost btn--sm" href="${buildClearSearchHref()}">Clear</a>` : html``}
+</form>`;
 
 	if (total === 0) {
-		const emptyMessage = disabled
-			? 'No disabled feeds match the current filter.'
-			: 'No feeds yet. Add your first feed to get started.';
+		let emptyMessage;
+		if (titleSearch || domainSearch) {
+			emptyMessage = 'No feeds match your search.';
+		} else if (disabled) {
+			emptyMessage = 'No disabled feeds match the current filter.';
+		} else {
+			emptyMessage = 'No feeds yet. Add your first feed to get started.';
+		}
 
 		return html`<main>
     <div class="page-header">
@@ -39,7 +74,7 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
         </div>
     </div>
     ${banner}
-    <div class="toolbar">${filterLink}</div>
+    <div class="toolbar">${filterLink}${searchForm}</div>
     <div class="empty-state">
         <div class="empty-state__glyph">⊘</div>
         <div class="empty-state__title">No feeds found</div>
@@ -56,14 +91,13 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
 		const toggleLabel = noCrawl ? 'Enable' : 'Disable';
 		const toggleClass = noCrawl ? 'btn btn--ghost btn--sm' : 'btn btn--ghost btn--sm';
 
-		let detailHref = `/feeds/${feed.id}`;
-		if (page > 1 && disabled) {
-			detailHref += `?listPage=${page}&disabled=1`;
-		} else if (page > 1) {
-			detailHref += `?listPage=${page}`;
-		} else if (disabled) {
-			detailHref += `?disabled=1`;
-		}
+		const listParams = new URLSearchParams();
+		if (page > 1) listParams.set('listPage', String(page));
+		if (disabled) listParams.set('disabled', '1');
+		if (titleSearch) listParams.set('title', titleSearch);
+		if (domainSearch) listParams.set('domain', domainSearch);
+		const listQs = listParams.toString();
+		const detailHref = `/feeds/${feed.id}` + (listQs ? `?${listQs}` : '');
 
 		const itemClass = noCrawl ? 'feed-item feed-item--disabled' : 'feed-item';
 
@@ -84,23 +118,15 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
 </li>`;
 	});
 
-	let prevLink;
-	if (page === 1) {
-		prevLink = html`<a class="pagination__link" aria-disabled="true">← Prev</a>`;
-	} else if (disabled) {
-		prevLink = html`<a class="pagination__link" href="/feeds?disabled=1&page=${page - 1}">← Prev</a>`;
-	} else {
-		prevLink = html`<a class="pagination__link" href="/feeds?page=${page - 1}">← Prev</a>`;
-	}
+	const prevLink =
+		page === 1
+			? html`<a class="btn btn--ghost btn--sm" aria-disabled="true">← Prev</a>`
+			: html`<a class="btn btn--ghost btn--sm" href="${'/feeds' + buildParams({ page: page - 1 })}">← Prev</a>`;
 
-	let nextLink;
-	if (page === totalPages) {
-		nextLink = html`<a class="pagination__link" aria-disabled="true">Next →</a>`;
-	} else if (disabled) {
-		nextLink = html`<a class="pagination__link" href="/feeds?disabled=1&page=${page + 1}">Next →</a>`;
-	} else {
-		nextLink = html`<a class="pagination__link" href="/feeds?page=${page + 1}">Next →</a>`;
-	}
+	const nextLink =
+		page === totalPages
+			? html`<a class="btn btn--ghost btn--sm" aria-disabled="true">Next →</a>`
+			: html`<a class="btn btn--ghost btn--sm" href="${'/feeds' + buildParams({ page: page + 1 })}">Next →</a>`;
 
 	return html`<main>
     <div class="page-header">
@@ -113,7 +139,7 @@ export function feedsPage({ feeds, total, page, totalPages, disabled, bannerHtml
         </div>
     </div>
     ${banner}
-    <div class="toolbar">${filterLink}</div>
+    <div class="toolbar">${filterLink}${searchForm}</div>
     <ul class="feed-list">
         ${raw(items.join('\n'))}
     </ul>

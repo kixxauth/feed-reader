@@ -7,7 +7,7 @@
  * Exports:
  *   PAGE_SIZE                  — feeds per page (50), used by route handlers for pagination math
  *   ARTICLES_PAGE_SIZE         — articles per page (20), used by articles route handler
- *   getFeedsPaginated          — returns one page of feeds plus the total count; accepts optional { disabledOnly } to filter to no_crawl = 1
+ *   getFeedsPaginated          — returns one page of feeds plus the total count; accepts optional { disabledOnly, titleSearch, domainSearch } filters
  *   getFeedById                — returns a single feed by id, or null if not found
  *   getFeedByXmlUrl            — returns a single feed by normalized xml_url, or null if not found
  *   getArticlesByFeedPaginated — returns paginated articles for a feed with optional date filtering
@@ -41,22 +41,39 @@ export const ARTICLES_PAGE_SIZE = 20;
  *
  * @param {D1Database} db - The D1 database binding
  * @param {number} page - 1-indexed page number (clamped to 1 if < 1)
- * @param {{ disabledOnly?: boolean }} [options] - Optional filter options
- * @param {boolean} [options.disabledOnly=false] - When true, only return feeds where no_crawl = 1
+ * @param {{ disabledOnly?: boolean, titleSearch?: string, domainSearch?: string }} [options]
  * @returns {Promise<{ feeds: Array, total: number }>}
  */
-export async function getFeedsPaginated(db, page, { disabledOnly = false } = {}) {
+export async function getFeedsPaginated(db, page, { disabledOnly = false, titleSearch = '', domainSearch = '' } = {}) {
 	const clampedPage = Math.max(1, page);
 	const offset = (clampedPage - 1) * PAGE_SIZE;
 
-	const whereClause = disabledOnly ? ' WHERE no_crawl = 1' : '';
+	const conditions = [];
+	const bindings = [];
 
-	const countRow = await db.prepare(`SELECT COUNT(*) AS total FROM feeds${whereClause}`).first();
+	if (disabledOnly) {
+		conditions.push('no_crawl = 1');
+	}
+	if (titleSearch) {
+		conditions.push('title LIKE ?');
+		bindings.push(`%${titleSearch}%`);
+	}
+	if (domainSearch) {
+		conditions.push('hostname LIKE ?');
+		bindings.push(`%${domainSearch}%`);
+	}
+
+	const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+
+	const countRow = await db
+		.prepare(`SELECT COUNT(*) AS total FROM feeds${whereClause}`)
+		.bind(...bindings)
+		.first();
 	const total = countRow.total;
 
 	const result = await db
 		.prepare(`SELECT * FROM feeds${whereClause} ORDER BY hostname ASC LIMIT ? OFFSET ?`)
-		.bind(PAGE_SIZE, offset)
+		.bind(...bindings, PAGE_SIZE, offset)
 		.all();
 
 	return { feeds: result.results, total };

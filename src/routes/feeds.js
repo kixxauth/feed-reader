@@ -27,15 +27,19 @@ export async function handleFeeds(c) {
 	let page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
 
 	const disabled = c.req.query('disabled') === '1';
+	const titleSearch = c.req.query('title') || '';
+	const domainSearch = c.req.query('domain') || '';
 	const addedFeedId = c.req.query('addedFeedId') || '';
 	const crawlRunId = c.req.query('crawlRunId') || '';
 
-	let { feeds, total } = await getFeedsPaginated(c.env.DB, page, { disabledOnly: disabled });
+	const dbOptions = { disabledOnly: disabled, titleSearch, domainSearch };
+
+	let { feeds, total } = await getFeedsPaginated(c.env.DB, page, dbOptions);
 	const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
 	if (total > 0 && page > totalPages) {
 		page = totalPages;
-		({ feeds } = await getFeedsPaginated(c.env.DB, page, { disabledOnly: disabled }));
+		({ feeds } = await getFeedsPaginated(c.env.DB, page, dbOptions));
 	}
 
 	let bannerHtml;
@@ -55,6 +59,8 @@ export async function handleFeeds(c) {
 				page,
 				totalPages,
 				disabled,
+				titleSearch,
+				domainSearch,
 				bannerHtml,
 			}),
 			isAuthenticated: true,
