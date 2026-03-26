@@ -73,14 +73,16 @@ function fetchRemoteIds() {
   return ids;
 }
 
+const SKIP_COLUMNS = new Set(['no_crawl', 'consecutive_failure_count']);
+
 function buildInsert(record) {
-  const cols = COLUMNS.filter(c => c in record);
+  const cols = COLUMNS.filter(c => c in record && !SKIP_COLUMNS.has(c));
   const vals = cols.map(c => escapeVal(record[c]));
   return `INSERT INTO ${TABLE} (${cols.join(', ')}) VALUES (${vals.join(', ')});`;
 }
 
 function buildUpdate(record) {
-  const setCols = COLUMNS.filter(c => c in record && c !== ID_COL);
+  const setCols = COLUMNS.filter(c => c in record && c !== ID_COL && !SKIP_COLUMNS.has(c));
   const sets = setCols.map(c => `${c} = ${escapeVal(record[c])}`).join(', ');
   return `UPDATE ${TABLE} SET ${sets} WHERE ${ID_COL} = ${escapeVal(record[ID_COL])};`;
 }
