@@ -20,7 +20,7 @@
  * All entry points return a summary object { crawlRunId, totalFeeds, totalFailed, totalArticlesAdded }.
  */
 
-import { parseFeedPreview, parseFeedXml } from './parser.js';
+import { parseFeed } from './parser.js';
 import { resolveArticleUrl } from './feed-utils.js';
 import {
 	getEnabledFeedIds,
@@ -108,8 +108,8 @@ async function processFeed(feed, startedAt, db) {
 
 	let articles;
 	try {
-		const preview = parseFeedPreview(xmlText);
-		if (!preview) {
+		const parsed = parseFeed(xmlText, feed.id);
+		if (!parsed) {
 			return {
 				status: 'failed',
 				articlesAdded: 0,
@@ -117,7 +117,7 @@ async function processFeed(feed, startedAt, db) {
 			};
 		}
 
-		articles = parseFeedXml(xmlText, feed.id);
+		articles = parsed.articles;
 	} catch (err) {
 		return {
 			status: 'failed',
@@ -194,7 +194,7 @@ export async function dispatchCrawl(db, queue) {
 
 	await recordCrawlRun(db, { id: crawlRunId, startedAt });
 
-	const BATCH_SIZE = 50;
+	const BATCH_SIZE = 20;
 	const batches = [];
 	for (let i = 0; i < ids.length; i += BATCH_SIZE) {
 		batches.push(ids.slice(i, i + BATCH_SIZE));

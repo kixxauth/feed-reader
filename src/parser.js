@@ -610,6 +610,40 @@ function parseAtomFeed(xmlText, feedId) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Parse raw XML text and return both feed-level metadata and articles in one pass.
+ * Handles both RSS 2.0 and Atom 1.0.
+ *
+ * Returns null for unrecognized root elements or non-XML input.
+ *
+ * @param {string} xmlText - The raw feed XML
+ * @param {string} feedId - Used for article id derivation
+ * @returns {{
+ *   metadata: {
+ *     type: 'rss'|'atom',
+ *     title: string|null,
+ *     description: string|null,
+ *     htmlUrl: string|null,
+ *     lastBuildDate: string|null
+ *   },
+ *   articles: Array<{ id: string|null, link: string|null, title: string|null, published: string|null, updated: string|null }>
+ * }|null}
+ * @throws {Error} - If the XML is malformed (message starts with "Invalid XML:")
+ */
+export function parseFeed(xmlText, feedId) {
+	const format = detectFeedFormat(xmlText);
+
+	if (format === 'rss') {
+		return parseRssFeed(xmlText, feedId);
+	}
+
+	if (format === 'atom') {
+		return parseAtomFeed(xmlText, feedId);
+	}
+
+	return null;
+}
+
+/**
  * Parse raw XML text and extract a flat array of article data objects.
  * Handles both RSS 2.0 and Atom 1.0.
  *
@@ -619,18 +653,8 @@ function parseAtomFeed(xmlText, feedId) {
  * @throws {Error} - If the XML is malformed (message starts with "Invalid XML:")
  */
 export function parseFeedXml(xmlText, feedId) {
-	const format = detectFeedFormat(xmlText);
-
-	if (format === 'rss') {
-		return parseRssFeed(xmlText, feedId).articles;
-	}
-
-	if (format === 'atom') {
-		return parseAtomFeed(xmlText, feedId).articles;
-	}
-
-	// Unrecognized root or non-XML input
-	return [];
+	const result = parseFeed(xmlText, feedId);
+	return result ? result.articles : [];
 }
 
 /**
@@ -648,15 +672,6 @@ export function parseFeedXml(xmlText, feedId) {
  * @throws {Error} - If the XML is malformed (message starts with "Invalid XML:")
  */
 export function parseFeedPreview(xmlText) {
-	const format = detectFeedFormat(xmlText);
-
-	if (format === 'rss') {
-		return parseRssFeed(xmlText, 'preview-feed').metadata;
-	}
-
-	if (format === 'atom') {
-		return parseAtomFeed(xmlText, 'preview-feed').metadata;
-	}
-
-	return null;
+	const result = parseFeed(xmlText, 'preview-feed');
+	return result ? result.metadata : null;
 }

@@ -408,7 +408,7 @@ export async function recordCrawlRun(db, { id, startedAt }) {
  */
 export async function recordCrawlRunDetail(db, { crawlRunId, feedId, status, articlesAdded, errorMessage, autoDisabled }) {
 	const sql = `
-		INSERT INTO crawl_run_details (crawl_run_id, feed_id, status, articles_added, error_message, auto_disabled)
+		INSERT OR IGNORE INTO crawl_run_details (crawl_run_id, feed_id, status, articles_added, error_message, auto_disabled)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`;
 	return db
