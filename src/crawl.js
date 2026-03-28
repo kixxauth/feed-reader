@@ -194,7 +194,7 @@ export async function dispatchCrawl(db, queue) {
 
 	await recordCrawlRun(db, { id: crawlRunId, startedAt });
 
-	const BATCH_SIZE = 20;
+	const BATCH_SIZE = 5;
 	const batches = [];
 	for (let i = 0; i < ids.length; i += BATCH_SIZE) {
 		batches.push(ids.slice(i, i + BATCH_SIZE));
