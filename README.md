@@ -72,6 +72,30 @@ npx wrangler d1 migrations apply feed-reader-db --remote
 
 Migrations live in `migrations/`. The `migrations_dir` field in `wrangler.jsonc` tells wrangler where to find them.
 
+**Run a SQL command (local):**
+
+```bash
+npx wrangler d1 execute feed-reader-db --local --command "SELECT * FROM feeds LIMIT 10"
+```
+
+**Run a SQL command (production):**
+
+```bash
+npx wrangler d1 execute feed-reader-db --remote --command "SELECT * FROM feeds LIMIT 10"
+```
+
+**Run a SQL script file (local):**
+
+```bash
+npx wrangler d1 execute feed-reader-db --local --file ./path/to/script.sql
+```
+
+**Run a SQL script file (production):**
+
+```bash
+npx wrangler d1 execute feed-reader-db --remote --file ./path/to/script.sql
+```
+
 The add-feed flow relies on the normalized `xml_url` uniqueness rule added by `migrations/0006_add_unique_index_on_feed_xml_url.sql`, so apply migrations before testing feed creation locally.
 
 ## Feed Crawling
