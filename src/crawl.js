@@ -40,7 +40,7 @@ import {
 const USER_AGENT = 'FeedReader/1.0';
 const FETCH_TIMEOUT_MS = 30_000;
 const AUTO_DISABLE_THRESHOLD = 5;
-const ARTICLE_BATCH_SIZE = 20;
+const ARTICLE_BATCH_SIZE = 10;
 
 /**
  * Fetch a feed URL with a 30-second AbortController timeout.
