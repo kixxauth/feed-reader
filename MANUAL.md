@@ -414,25 +414,32 @@ The scheduled crawl uses a two-phase fan-out pipeline backed by **Cloudflare Que
 1. Queries all enabled feed IDs (`no_crawl = 0`) from D1.
 2. Generates a shared `crawlRunId` (UUID) and `startedAt` timestamp.
 3. Inserts the `crawl_runs` header row (id and started_at only).
-4. Enqueues **one message per feed**, each carrying `{ crawlRunId, startedAt, feedId }`. Messages are sent to the queue in batches of 100 (the Cloudflare `sendBatch` limit).
+4. Enqueues **one message per feed**, each carrying `{ type: 'crawl', crawlRunId, startedAt, feedId }`. Messages are sent to the queue in batches of 100 (the Cloudflare `sendBatch` limit).
 5. Returns `{ crawlRunId, totalFeeds, batchCount }` for logging (`batchCount` is the number of `sendBatch` calls).
 
 This is lightweight and fast — it only touches D1 once (for the header row) and fires messages to the queue.
 
-**Phase 2 — Queue Consumer** (`processCrawlJob`, called from the `queue` handler):
-Each message represents a single feed. The consumer invocation:
+**Phase 2 — Queue Consumer: crawl job** (`processCrawlJob`, called from the `queue` handler):
+Each `type: 'crawl'` message represents a single feed. The consumer invocation:
 1. Fetches the full feed object by ID via `getFeedById`.
-2. Fetches the RSS/Atom XML (30-second timeout, `FeedReader/1.0` user agent), parses it, and inserts new articles (`ON CONFLICT DO NOTHING`).
+2. Fetches the RSS/Atom XML (30-second timeout, `FeedReader/1.0` user agent) and parses it into prepared article objects.
 3. On success: resets `consecutive_failure_count` to 0.
 4. On failure: increments `consecutive_failure_count`. If it reaches **5**, auto-disables the feed (`no_crawl = 1`).
-5. Records a `crawl_run_details` row for the feed.
-6. Returns `{ crawlRunId, feedId, status, articlesAdded, errorMessage }` and acknowledges the message.
+5. Records a `crawl_run_details` row for the feed (with `articles_added = 0`).
+6. Batches the parsed articles into groups of 20 and enqueues each batch as a `type: 'article-batch'` message for Phase 3.
+
+**Phase 3 — Queue Consumer: article batch** (`processArticleBatchJob`, called from the `queue` handler):
+Each `type: 'article-batch'` message carries up to 20 prepared articles. The consumer invocation:
+1. Inserts each article into the `articles` table (`ON CONFLICT DO NOTHING`).
+2. Increments `articles_added` on the corresponding `crawl_run_details` row by the number of newly inserted articles.
+
+This three-phase design keeps each queue job well within the Cloudflare Workers limit of 50 D1 calls per invocation: crawl jobs use ~3–4 calls, and article-batch jobs use up to 21 (20 inserts + 1 count update).
 
 If a consumer throws before acking, the queue will retry the message (up to `max_retries` times, currently 3, with `max_batch_size: 1`, `max_batch_timeout: 0`).
 
 **Crawl history totals** (feeds attempted, feeds failed, articles added) are not stored on the `crawl_runs` row. They are derived at query time via `LEFT JOIN` aggregation over `crawl_run_details`, which eliminates any need for end-of-crawl coordination across consumers.
 
-**Single-feed path** (`performFeedCrawl`): used immediately after a user adds a feed via the UI. It inserts its own `crawl_runs` row and delegates to `processCrawlJob` for the actual crawl and history recording.
+**Single-feed path** (`performFeedCrawl`): used immediately after a user adds a feed via the UI. It inserts its own `crawl_runs` row and delegates to `processCrawlJob` with `queue = null`, which inserts articles directly instead of enqueuing batches. This avoids the queue round-trip for the add-feed flow and keeps the banner feedback immediate.
 
 ### Article ID Derivation
 
@@ -868,8 +875,8 @@ feed-reader/
 |---|---|
 | `src/index.js` | Mounts middleware and all routes; exports the Hono app, `scheduled` handler (dispatches crawl), and `queue` handler (processes crawl batches) |
 | `src/layout.js` | `renderLayout` — wraps page content in the full HTML shell; uses `html` tag from `hono/html`; CSS is inlined via `raw(styles)` |
-| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeedIds`, `getFeedsByIds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed`, `getDailyReaderArticles`, `updateFeedFeatured` |
-| `src/crawl.js` | `dispatchCrawl` (cron dispatcher), `processCrawlJob` (queue consumer, one feed per job), `performFeedCrawl` (single-feed immediate crawl for the add-feed flow) |
+| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeedIds`, `getFeedsByIds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `incrementCrawlRunDetailArticlesAdded`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed`, `getDailyReaderArticles`, `updateFeedFeatured` |
+| `src/crawl.js` | `dispatchCrawl` (cron dispatcher), `processCrawlJob` (queue consumer: fetch/parse/enqueue article batches), `processArticleBatchJob` (queue consumer: insert article batch), `performFeedCrawl` (single-feed immediate crawl for the add-feed flow, inserts directly) |
 | `src/feed-discovery.js` | Add-feed URL validation, website scraping, candidate discovery, and user-facing validation messages |
 | `src/feed-utils.js` | URL canonicalization, duplicate-comparison normalization, hostname derivation, and article URL resolution |
 | `src/html-utils.js` | `escapeHtml()` — used by `api/add-feed.js` when constructing trusted HTML strings for duplicate-feed notices |

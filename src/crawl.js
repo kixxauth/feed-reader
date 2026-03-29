@@ -5,11 +5,16 @@
  *   dispatchCrawl(db, queue)   — cron-triggered dispatcher: queries enabled feed IDs,
  *                                inserts the crawl_runs header row, and enqueues one
  *                                message per feed (sent to the queue in batches of 100).
- *   processCrawlJob(db, { crawlRunId, startedAt, feedId })
+ *   processCrawlJob(db, queue, { crawlRunId, startedAt, feedId })
  *                              — queue consumer: fetches the feed object for the given
- *                                ID, fetches and parses the XML, inserts new articles,
- *                                writes DB updates and the crawl_run_details row, and
- *                                returns a result object.
+ *                                ID, fetches and parses the XML, records crawl status,
+ *                                and enqueues article-batch jobs for insertion.
+ *                                When queue is null, inserts articles directly instead
+ *                                (used by performFeedCrawl in the waitUntil context).
+ *   processArticleBatchJob(db, { crawlRunId, feedId, articles, startedAt })
+ *                              — queue consumer: inserts a batch of articles into the
+ *                                database and increments the crawl_run_details
+ *                                articles_added count.
  *   performFeedCrawl(db, feedId, crawlRunId)
  *                              — single-feed crawl used immediately after a user adds a
  *                                feed via the UI; inserts its own crawl_runs row and
@@ -29,11 +34,13 @@ import {
 	insertArticle,
 	recordCrawlRunDetail,
 	recordCrawlRun,
+	incrementCrawlRunDetailArticlesAdded,
 } from './db.js';
 
 const USER_AGENT = 'FeedReader/1.0';
 const FETCH_TIMEOUT_MS = 30_000;
 const AUTO_DISABLE_THRESHOLD = 5;
+const ARTICLE_BATCH_SIZE = 20;
 
 /**
  * Fetch a feed URL with a 30-second AbortController timeout.
@@ -71,23 +78,17 @@ async function fetchFeedXml(url) {
 }
 
 /**
- * Process a single feed: fetch its XML, parse articles, insert new ones,
- * and return a result object describing what happened.
+ * Fetch and parse a single feed, returning prepared article objects
+ * ready for insertion. Does NOT insert anything into the database.
  *
- * Does NOT write anything to the database — the caller is responsible for
- * recording crawl_run_details and updating failure counts so the outer loop
- * retains full control over DB state.
- *
- * @param {object} feed - Feed row from the database (must have id, xml_url, consecutive_failure_count)
- * @param {string} startedAt - ISO 8601 timestamp of the crawl start (used as article.added)
- * @param {D1Database} db
- * @returns {Promise<{ status: 'success'|'failed', articlesAdded: number, errorMessage: string|null }>}
+ * @param {object} feed - Feed row from the database (must have id, xml_url, html_url)
+ * @returns {Promise<{ status: 'success'|'failed', articles: Array, errorMessage: string|null }>}
  */
-async function processFeed(feed, startedAt, db) {
+async function fetchAndParseFeed(feed) {
 	if (!feed.xml_url) {
 		return {
 			status: 'failed',
-			articlesAdded: 0,
+			articles: [],
 			errorMessage: 'Could not reach the feed URL (network error or server unavailable)',
 		};
 	}
@@ -98,57 +99,52 @@ async function processFeed(feed, startedAt, db) {
 	} catch (err) {
 		return {
 			status: 'failed',
-			articlesAdded: 0,
+			articles: [],
 			errorMessage: normalizeCrawlErrorMessage(err.message),
 		};
 	}
 
-	let articles;
+	let parsedArticles;
 	try {
 		const parsed = parseFeed(xmlText, feed.id);
 		if (!parsed) {
 			return {
 				status: 'failed',
-				articlesAdded: 0,
+				articles: [],
 				errorMessage: 'The feed returned invalid content',
 			};
 		}
 
-		articles = parsed.articles;
+		parsedArticles = parsed.articles;
 	} catch (err) {
 		return {
 			status: 'failed',
-			articlesAdded: 0,
+			articles: [],
 			errorMessage: normalizeCrawlErrorMessage(err.message),
 		};
 	}
 
-	let articlesAdded = 0;
-	for (const article of articles) {
-		// Skip articles where we could not derive a stable id
+	// Prepare article objects for insertion, filtering out those without a stable id
+	// and resolving relative URLs.
+	const articles = [];
+	for (const article of parsedArticles) {
 		if (!article.id) {
 			continue;
 		}
 
-		// Resolve relative article links (e.g. "/path/to/post") to absolute URLs
-		// before storage. Render-time resolution in reader.js and articles.js
-		// provides a safety net for articles already stored with relative links.
 		const resolvedLink = resolveArticleUrl(article.link, feed.html_url || feed.xml_url);
 
-		const result = await insertArticle(db, {
+		articles.push({
 			id: article.id,
 			feedId: feed.id,
 			link: resolvedLink,
 			title: article.title,
 			published: article.published,
 			updated: article.updated,
-			added: startedAt,
 		});
-
-		articlesAdded += result.meta.changes;
 	}
 
-	return { status: 'success', articlesAdded, errorMessage: null };
+	return { status: 'success', articles, errorMessage: null };
 }
 
 /**
@@ -199,7 +195,7 @@ export async function dispatchCrawl(db, queue) {
 		const chunk = ids.slice(i, i + SEND_BATCH_SIZE);
 		await queue.sendBatch(
 			chunk.map((feedId) => ({
-				body: { crawlRunId, startedAt, feedId },
+				body: { type: 'crawl', crawlRunId, startedAt, feedId },
 			}))
 		);
 		batchCount += 1;
@@ -214,17 +210,23 @@ export async function dispatchCrawl(db, queue) {
 
 /**
  * Process a single feed as a queue consumer invocation.
- * Fetches the full feed object by ID, fetches and parses the XML, inserts new
- * articles, updates failure counts, and writes a crawl_run_details row.
+ * Fetches the full feed object by ID, fetches and parses the XML,
+ * updates failure counts, writes a crawl_run_details row, and enqueues
+ * article-batch jobs for the parsed articles.
  *
  * Does NOT insert the crawl_runs row — that is the dispatcher's responsibility
  * via dispatchCrawl.
  *
  * @param {D1Database} db
+ * @param {Queue|null} queue - Cloudflare Queue producer binding (env.CRAWL_QUEUE).
+ *   When non-null, articles are batched and enqueued for insertion by separate
+ *   article-batch queue jobs (respects the 50 DB-call-per-job limit).
+ *   When null, articles are inserted directly in this invocation (used by
+ *   performFeedCrawl which runs in waitUntil, not as a queue consumer).
  * @param {{ crawlRunId: string, startedAt: string, feedId: string }} job
- * @returns {Promise<{ crawlRunId: string, feedId: string, status: string, articlesAdded: number, errorMessage: string|null }>}
+ * @returns {Promise<{ crawlRunId: string, feedId: string, status: string, articlesFound: number, errorMessage: string|null }>}
  */
-export async function processCrawlJob(db, { crawlRunId, startedAt, feedId }) {
+export async function processCrawlJob(db, queue, { crawlRunId, startedAt, feedId }) {
 	const feed = await getFeedById(db, feedId);
 
 	if (!feed) {
@@ -236,10 +238,10 @@ export async function processCrawlJob(db, { crawlRunId, startedAt, feedId }) {
 			errorMessage: `Feed not found: ${feedId}`,
 			autoDisabled: 0,
 		});
-		return { crawlRunId, feedId, status: 'failed', articlesAdded: 0, errorMessage: `Feed not found: ${feedId}` };
+		return { crawlRunId, feedId, status: 'failed', articlesFound: 0, errorMessage: `Feed not found: ${feedId}` };
 	}
 
-	const feedResult = await processFeed(feed, startedAt, db);
+	const feedResult = await fetchAndParseFeed(feed);
 
 	let autoDisabled = 0;
 
@@ -257,36 +259,122 @@ export async function processCrawlJob(db, { crawlRunId, startedAt, feedId }) {
 	}
 
 	const status = autoDisabled ? 'auto_disabled' : feedResult.status;
-	await recordCrawlRunDetail(db, {
-		crawlRunId,
-		feedId: feed.id,
-		status,
-		articlesAdded: feedResult.articlesAdded,
-		errorMessage: feedResult.errorMessage,
-		autoDisabled,
-	});
+
+	if (queue) {
+		// Queue path: record the detail row with articles_added=0 now;
+		// article-batch jobs will increment the count as they insert articles.
+		await recordCrawlRunDetail(db, {
+			crawlRunId,
+			feedId: feed.id,
+			status,
+			articlesAdded: 0,
+			errorMessage: feedResult.errorMessage,
+			autoDisabled,
+		});
+
+		// Enqueue article batches for insertion
+		if (feedResult.articles.length > 0) {
+			const SEND_BATCH_SIZE = 100; // CF sendBatch limit
+			const articleBatches = [];
+			for (let i = 0; i < feedResult.articles.length; i += ARTICLE_BATCH_SIZE) {
+				articleBatches.push(feedResult.articles.slice(i, i + ARTICLE_BATCH_SIZE));
+			}
+
+			for (let i = 0; i < articleBatches.length; i += SEND_BATCH_SIZE) {
+				const chunk = articleBatches.slice(i, i + SEND_BATCH_SIZE);
+				await queue.sendBatch(
+					chunk.map((articles) => ({
+						body: { type: 'article-batch', crawlRunId, feedId: feed.id, articles, startedAt },
+					}))
+				);
+			}
+		}
+	} else {
+		// Direct path: insert articles inline and record the detail row
+		// with the actual count. Used by performFeedCrawl (waitUntil context,
+		// not subject to the queue job DB-call limit).
+		let articlesAdded = 0;
+
+		for (const article of feedResult.articles) {
+			const result = await insertArticle(db, {
+				id: article.id,
+				feedId: article.feedId,
+				link: article.link,
+				title: article.title,
+				published: article.published,
+				updated: article.updated,
+				added: startedAt,
+			});
+
+			articlesAdded += result.meta.changes;
+		}
+
+		await recordCrawlRunDetail(db, {
+			crawlRunId,
+			feedId: feed.id,
+			status,
+			articlesAdded,
+			errorMessage: feedResult.errorMessage,
+			autoDisabled,
+		});
+	}
 
 	return {
 		crawlRunId,
 		feedId: feed.id,
 		status,
-		articlesAdded: feedResult.articlesAdded,
+		articlesFound: feedResult.articles.length,
 		errorMessage: feedResult.errorMessage,
 	};
 }
 
 /**
+ * Process a batch of articles as a queue consumer invocation.
+ * Inserts each article into the database and increments the
+ * articles_added count on the corresponding crawl_run_details row.
+ *
+ * @param {D1Database} db
+ * @param {{ crawlRunId: string, feedId: string, articles: Array, startedAt: string }} job
+ * @returns {Promise<{ crawlRunId: string, feedId: string, articlesAdded: number }>}
+ */
+export async function processArticleBatchJob(db, { crawlRunId, feedId, articles, startedAt }) {
+	let articlesAdded = 0;
+
+	for (const article of articles) {
+		const result = await insertArticle(db, {
+			id: article.id,
+			feedId: article.feedId,
+			link: article.link,
+			title: article.title,
+			published: article.published,
+			updated: article.updated,
+			added: startedAt,
+		});
+
+		articlesAdded += result.meta.changes;
+	}
+
+	if (articlesAdded > 0) {
+		await incrementCrawlRunDetailArticlesAdded(db, crawlRunId, feedId, articlesAdded);
+	}
+
+	return { crawlRunId, feedId, articlesAdded };
+}
+
+/**
  * Crawl one feed immediately after it is added via the UI.
- * Inserts its own crawl_runs row and delegates to processCrawlJob for the actual crawl.
+ * Inserts its own crawl_runs row and delegates to processCrawlJob for the
+ * actual crawl. Passes null for the queue so articles are inserted directly
+ * (the waitUntil context is not subject to the queue job DB-call limit).
  *
  * @param {D1Database} db - The D1 database binding (env.DB)
  * @param {string} feedId - The feed id to crawl
  * @param {string} crawlRunId - The pre-generated crawl run id used by the redirect banner
- * @returns {Promise<{ crawlRunId: string, feedId: string, status: string, articlesAdded: number, errorMessage: string|null }>}
+ * @returns {Promise<{ crawlRunId: string, feedId: string, status: string, articlesFound: number, errorMessage: string|null }>}
  */
 export async function performFeedCrawl(db, feedId, crawlRunId) {
 	const startedAt = new Date().toISOString();
 	await recordCrawlRun(db, { id: crawlRunId, startedAt });
 
-	return await processCrawlJob(db, { crawlRunId, startedAt, feedId });
+	return await processCrawlJob(db, null, { crawlRunId, startedAt, feedId });
 }

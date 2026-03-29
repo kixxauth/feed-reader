@@ -6,7 +6,9 @@ The current single-invocation sequential crawl is replaced with a two-phase pipe
 
 ## Implementation Notes
 
-**Status**: Complete. All TODO items implemented. Tests: 188 passing.
+**Status**: Complete. All TODO items implemented. Tests: 196 passing.
+
+**Follow-on: article-batch fan-out (2026-03-29)**: After discovering that `processCrawlJob` could exceed the 50 D1 calls per queue job limit when feeds contain many articles, a second fan-out layer was added. `processCrawlJob` no longer inserts articles directly; instead it batches parsed articles into groups of 20 and enqueues each batch as a `type: 'article-batch'` message. A new `processArticleBatchJob` function handles insertion and increments the `crawl_run_details.articles_added` count via `incrementCrawlRunDetailArticlesAdded`. The queue handler in `index.js` routes messages by `type`. `performFeedCrawl` (the add-feed immediate crawl path) passes `queue = null` to `processCrawlJob`, which inserts articles directly instead of enqueuing — this avoids the queue round-trip and sidesteps a test environment issue where the queue consumer's D1 instance lacks test migrations.
 
 **Deviation from plan**: The plan did not specify `max_batch_timeout` for the queue consumer. The implementation chose `max_batch_timeout: 0` (immediate delivery) — the right default for a crawl pipeline where there is no benefit to waiting for more messages to accumulate.
 
