@@ -18,7 +18,8 @@
       "Bash(python3 -c \"import sys, json; d = json.load\\(sys.stdin\\); print\\(''''main:'''', d.get\\(''''main''''\\)\\); print\\(''''module:'''', d.get\\(''''module''''\\)\\); print\\(''''exports:'''', d.get\\(''''exports''''\\)\\); print\\(''''type:'''', d.get\\(''''type''''\\)\\)\")",
       "Bash(node:*)",
       "Bash(npm ls:*)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(npx vitest:*)"
     ]
   }
 }

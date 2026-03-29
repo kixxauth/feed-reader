@@ -3,21 +3,19 @@
  *
  * Exports:
  *   dispatchCrawl(db, queue)   — cron-triggered dispatcher: queries enabled feed IDs,
- *                                inserts the crawl_runs header row, and enqueues
- *                                batches of 50 feed IDs for queue consumer processing.
- *   processCrawlBatch(db, { crawlRunId, startedAt, feedIds })
- *                              — queue consumer: fetches full feed objects for the given
- *                                IDs, processes them 6 at a time concurrently, writes all
- *                                per-feed DB updates and crawl_run_details rows, and
- *                                returns a summary object.
+ *                                inserts the crawl_runs header row, and enqueues one
+ *                                message per feed (sent to the queue in batches of 100).
+ *   processCrawlJob(db, { crawlRunId, startedAt, feedId })
+ *                              — queue consumer: fetches the feed object for the given
+ *                                ID, fetches and parses the XML, inserts new articles,
+ *                                writes DB updates and the crawl_run_details row, and
+ *                                returns a result object.
  *   performFeedCrawl(db, feedId, crawlRunId)
  *                              — single-feed crawl used immediately after a user adds a
  *                                feed via the UI; inserts its own crawl_runs row and
- *                                delegates to processCrawlBatch for the actual crawl.
+ *                                delegates to processCrawlJob for the actual crawl.
  *
  * Supports both RSS 2.0 and Atom 1.0.
- *
- * All entry points return a summary object { crawlRunId, totalFeeds, totalFailed, totalArticlesAdded }.
  */
 
 import { parseFeed } from './parser.js';
@@ -25,7 +23,6 @@ import { resolveArticleUrl } from './feed-utils.js';
 import {
 	getEnabledFeedIds,
 	getFeedById,
-	getFeedsByIds,
 	resetFeedFailureCount,
 	updateFeedFailureCount,
 	disableFeed,
@@ -172,9 +169,10 @@ function normalizeCrawlErrorMessage(message) {
 
 /**
  * Cron-triggered dispatcher: query all enabled feed IDs, insert the crawl_runs
- * header row, split IDs into batches of 50, and enqueue each batch as a queue
- * message. Each message carries the shared crawlRunId and startedAt so all
- * consumer invocations contribute to one logical crawl run.
+ * header row, and enqueue one message per feed. Messages are sent to the queue
+ * in batches of 100 (the Cloudflare sendBatch limit). Each message carries the
+ * shared crawlRunId and startedAt so all consumer invocations contribute to one
+ * logical crawl run.
  *
  * @param {D1Database} db
  * @param {Queue} queue - Cloudflare Queue producer binding (env.CRAWL_QUEUE)
@@ -194,107 +192,101 @@ export async function dispatchCrawl(db, queue) {
 
 	await recordCrawlRun(db, { id: crawlRunId, startedAt });
 
-	const BATCH_SIZE = 5;
-	const batches = [];
-	for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-		batches.push(ids.slice(i, i + BATCH_SIZE));
+	// One message per feed, sent in batches of 100 (CF sendBatch limit)
+	const SEND_BATCH_SIZE = 100;
+	let batchCount = 0;
+	for (let i = 0; i < ids.length; i += SEND_BATCH_SIZE) {
+		const chunk = ids.slice(i, i + SEND_BATCH_SIZE);
+		await queue.sendBatch(
+			chunk.map((feedId) => ({
+				body: { crawlRunId, startedAt, feedId },
+			}))
+		);
+		batchCount += 1;
 	}
-
-	await queue.sendBatch(
-		batches.map((feedIds) => ({
-			body: { crawlRunId, startedAt, feedIds },
-		}))
-	);
 
 	return {
 		crawlRunId,
 		totalFeeds: ids.length,
-		batchCount: batches.length,
+		batchCount,
 	};
 }
 
 /**
- * Process a batch of feed IDs as a queue consumer invocation.
- * Re-hydrates full feed objects from the provided IDs, processes them in
- * concurrent groups of 6 (the per-invocation connection limit), writes all
- * per-feed DB updates, and returns a summary.
+ * Process a single feed as a queue consumer invocation.
+ * Fetches the full feed object by ID, fetches and parses the XML, inserts new
+ * articles, updates failure counts, and writes a crawl_run_details row.
  *
  * Does NOT insert the crawl_runs row — that is the dispatcher's responsibility
  * via dispatchCrawl.
  *
  * @param {D1Database} db
- * @param {{ crawlRunId: string, startedAt: string, feedIds: string[] }} batch
- * @returns {Promise<{ crawlRunId: string, totalFeeds: number, totalFailed: number, totalArticlesAdded: number }>}
+ * @param {{ crawlRunId: string, startedAt: string, feedId: string }} job
+ * @returns {Promise<{ crawlRunId: string, feedId: string, status: string, articlesAdded: number, errorMessage: string|null }>}
  */
-export async function processCrawlBatch(db, { crawlRunId, startedAt, feedIds }) {
-	const feeds = await getFeedsByIds(db, feedIds);
+export async function processCrawlJob(db, { crawlRunId, startedAt, feedId }) {
+	const feed = await getFeedById(db, feedId);
 
-	let totalFailed = 0;
-	let totalArticlesAdded = 0;
-
-	// Process feeds in concurrent groups of 6
-	const CONCURRENCY = 6;
-	for (let i = 0; i < feeds.length; i += CONCURRENCY) {
-		const group = feeds.slice(i, i + CONCURRENCY);
-		await Promise.all(
-			group.map(async (feed) => {
-				const feedResult = await processFeed(feed, startedAt, db);
-
-				let autoDisabled = 0;
-
-				if (feedResult.status === 'success') {
-					await resetFeedFailureCount(db, feed.id);
-					totalArticlesAdded += feedResult.articlesAdded;
-				} else {
-					totalFailed += 1;
-					const newFailureCount = (feed.consecutive_failure_count ?? 0) + 1;
-
-					if (newFailureCount >= AUTO_DISABLE_THRESHOLD) {
-						await disableFeed(db, feed.id);
-						autoDisabled = 1;
-					} else {
-						await updateFeedFailureCount(db, feed.id, newFailureCount);
-					}
-				}
-
-				const detailStatus = autoDisabled ? 'auto_disabled' : feedResult.status;
-				await recordCrawlRunDetail(db, {
-					crawlRunId,
-					feedId: feed.id,
-					status: detailStatus,
-					articlesAdded: feedResult.articlesAdded,
-					errorMessage: feedResult.errorMessage,
-					autoDisabled,
-				});
-			})
-		);
+	if (!feed) {
+		await recordCrawlRunDetail(db, {
+			crawlRunId,
+			feedId,
+			status: 'failed',
+			articlesAdded: 0,
+			errorMessage: `Feed not found: ${feedId}`,
+			autoDisabled: 0,
+		});
+		return { crawlRunId, feedId, status: 'failed', articlesAdded: 0, errorMessage: `Feed not found: ${feedId}` };
 	}
+
+	const feedResult = await processFeed(feed, startedAt, db);
+
+	let autoDisabled = 0;
+
+	if (feedResult.status === 'success') {
+		await resetFeedFailureCount(db, feed.id);
+	} else {
+		const newFailureCount = (feed.consecutive_failure_count ?? 0) + 1;
+
+		if (newFailureCount >= AUTO_DISABLE_THRESHOLD) {
+			await disableFeed(db, feed.id);
+			autoDisabled = 1;
+		} else {
+			await updateFeedFailureCount(db, feed.id, newFailureCount);
+		}
+	}
+
+	const status = autoDisabled ? 'auto_disabled' : feedResult.status;
+	await recordCrawlRunDetail(db, {
+		crawlRunId,
+		feedId: feed.id,
+		status,
+		articlesAdded: feedResult.articlesAdded,
+		errorMessage: feedResult.errorMessage,
+		autoDisabled,
+	});
 
 	return {
 		crawlRunId,
-		totalFeeds: feeds.length,
-		totalFailed,
-		totalArticlesAdded,
+		feedId: feed.id,
+		status,
+		articlesAdded: feedResult.articlesAdded,
+		errorMessage: feedResult.errorMessage,
 	};
 }
 
 /**
  * Crawl one feed immediately after it is added via the UI.
- * Inserts its own crawl_runs row and delegates to processCrawlBatch for the actual crawl.
+ * Inserts its own crawl_runs row and delegates to processCrawlJob for the actual crawl.
  *
  * @param {D1Database} db - The D1 database binding (env.DB)
  * @param {string} feedId - The feed id to crawl
  * @param {string} crawlRunId - The pre-generated crawl run id used by the redirect banner
- * @returns {Promise<{ crawlRunId: string, totalFeeds: number, totalFailed: number, totalArticlesAdded: number }>}
+ * @returns {Promise<{ crawlRunId: string, feedId: string, status: string, articlesAdded: number, errorMessage: string|null }>}
  */
 export async function performFeedCrawl(db, feedId, crawlRunId) {
-	const feed = await getFeedById(db, feedId);
-	if (feed === null) {
-		throw new Error(`Feed not found: ${feedId}`);
-	}
-
 	const startedAt = new Date().toISOString();
 	await recordCrawlRun(db, { id: crawlRunId, startedAt });
 
-	return await processCrawlBatch(db, { crawlRunId, startedAt, feedIds: [feedId] });
+	return await processCrawlJob(db, { crawlRunId, startedAt, feedId });
 }

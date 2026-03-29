@@ -16,7 +16,7 @@ import { handleToggleFeedCrawl } from './routes/api/toggle-feed-crawl.js';
 import { handleToggleFeatured } from './routes/api/toggle-featured.js';
 import { handleCrawlHistory, handleCrawlHistoryDetail } from './routes/crawl-history.js';
 import { handleReader } from './routes/reader.js';
-import { dispatchCrawl, processCrawlBatch } from './crawl.js';
+import { dispatchCrawl, processCrawlJob } from './crawl.js';
 
 const app = new Hono();
 
@@ -68,15 +68,13 @@ export default {
 	},
 	async queue(batch, env) {
 		for (const message of batch.messages) {
-			const { crawlRunId, feedIds } = message.body;
+			const { crawlRunId, feedId } = message.body;
 			try {
-				const summary = await processCrawlBatch(env.DB, message.body);
-				console.log('Crawl batch processed:', JSON.stringify(summary));
+				const result = await processCrawlJob(env.DB, message.body);
+				console.log('Crawl job processed:', JSON.stringify(result));
 				message.ack();
 			} catch (err) {
-				// Log before letting the error propagate — the queue will retry the
-				// unacknowledged message up to max_retries times.
-				console.error(`Crawl batch failed (crawlRunId=${crawlRunId}, feedCount=${feedIds?.length}):`, err);
+				console.error(`Crawl job failed (crawlRunId=${crawlRunId}, feedId=${feedId}):`, err);
 				throw err;
 			}
 		}
