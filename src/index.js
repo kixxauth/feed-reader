@@ -16,6 +16,8 @@ import { handleToggleFeedCrawl } from './routes/api/toggle-feed-crawl.js';
 import { handleToggleFeatured } from './routes/api/toggle-featured.js';
 import { handleCrawlHistory, handleCrawlHistoryDetail } from './routes/crawl-history.js';
 import { handleReader } from './routes/reader.js';
+import { handleDispatchCrawlPage } from './routes/dispatch-crawl.js';
+import { handleDispatchCrawl } from './routes/api/dispatch-crawl.js';
 import { dispatchCrawl, processCrawlJob } from './crawl.js';
 
 const app = new Hono();
@@ -41,6 +43,8 @@ app.post('/api/feeds/:feedId/toggle-featured', handleToggleFeatured);
 app.get('/crawl-history', handleCrawlHistory);
 app.get('/crawl-history/:crawlRunId', handleCrawlHistoryDetail);
 app.get('/reader', handleReader);
+app.get('/dispatch-crawl', handleDispatchCrawlPage);
+app.post('/api/dispatch-crawl', handleDispatchCrawl);
 
 app.get('/', (c) => {
 	return c.html(

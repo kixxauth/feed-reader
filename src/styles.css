@@ -1454,6 +1454,31 @@ a:hover {
 .self-center { align-self: center; }
 
 /* ============================================================
+   DISPATCH CRAWL
+   ============================================================ */
+
+.dispatch-crawl__description {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-accent-muted);
+    line-height: 1.6;
+}
+
+.dispatch-crawl__result {
+    background: var(--color-surface-high);
+    border: 1px solid var(--color-surface-high);
+    padding: 12px 16px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-accent-primary);
+    line-height: 1.8;
+}
+
+.dispatch-crawl__result code {
+    color: var(--color-action);
+}
+
+/* ============================================================
    RESPONSIVE — MOBILE (≤ 767px)
    ============================================================ */
 
