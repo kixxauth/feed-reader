@@ -1,914 +1,677 @@
-# Feed Reader — Operations Manual
+# Feed Reader Manual
 
-A simple RSS feed reader built on Cloudflare Workers. This document describes the current architecture, configuration, deployment, and maintenance procedures.
+This document is the current reference for the Feed Reader system: what it is, how to use it, and how it works.
 
----
+## 1. What This System Is
 
-## Table of Contents
+Feed Reader is a server-rendered RSS/Atom reader built on Cloudflare Workers. Authenticated users share one common pool of feeds, articles, and crawl history. There is no per-user subscription state, read tracking, or personalization.
 
-1. [Architecture Overview](#1-architecture-overview)
-2. [Database Schema](#2-database-schema)
-3. [Authentication System](#3-authentication-system)
-4. [Pages and Features](#4-pages-and-features)
-5. [Feed Crawling](#5-feed-crawling)
-6. [Configuration Reference](#6-configuration-reference)
-7. [First-Time Setup](#7-first-time-setup)
-8. [Deployment](#8-deployment)
-9. [Importing Data](#9-importing-data)
-10. [Testing](#10-testing)
-11. [Maintenance and Operations](#11-maintenance-and-operations)
-12. [File Structure](#12-file-structure)
-13. [Known Limitations](#13-known-limitations)
+Core capabilities:
 
----
+- Authenticate with GitHub OAuth.
+- Browse feeds and feed details.
+- Add a new feed from a website URL or direct feed URL.
+- Read articles by feed or by day in the cross-feed reader.
+- Review crawl history.
+- Manually dispatch a crawl of all enabled feeds.
 
-## 1. Architecture Overview
+## 2. Everyday Use
 
-### Technology Stack
+### Main pages
+
+- `/` - home page for authenticated users
+- `/reader` - daily cross-feed reading view
+- `/feeds` - feed list with filtering, search, and feed management
+- `/feeds/add` - add-feed flow
+- `/crawl-history` - crawl runs and per-feed results
+- `/dispatch-crawl` - manual crawl dispatch page
+
+### Navigation
+
+Authenticated pages use a sidebar layout from `src/layout.js`.
+
+Sidebar links:
+
+- `Home`
+- `Reader`
+- `Feeds`
+- `History`
+- `Sign out`
+
+`/dispatch-crawl` exists but is not linked from the sidebar.
+
+### Feeds list
+
+`/feeds` is the main management page.
+
+Behavior:
+
+- Pagination is `?page=N`, 1-indexed, 50 feeds per page.
+- Feeds are sorted by `hostname ASC`.
+- `?disabled=1` shows only disabled feeds.
+- `?title=` filters by partial title match.
+- `?domain=` filters by partial hostname match.
+- Pagination preserves active filters and search terms.
+- Empty states differ for:
+  - no feeds at all
+  - disabled-only view with no matches
+  - title/domain search with no matches
+
+Per-feed actions:
+
+- Open the feed detail page
+- Enable or disable crawling
+
+After a feed is added, `/feeds` may show one of three banners:
+
+- feed added and initial crawl still in progress
+- feed added and initial crawl succeeded
+- feed added and initial crawl failed
+
+### Feed detail
+
+`/feeds/:feedId` shows:
+
+- feed metadata
+- crawl status
+- consecutive failure count
+- featured status
+- recent crawl activity
+- actions to toggle crawling and featured status
+
+The page preserves `listPage` and `disabled` context for its back link and form redirects. It does not preserve the title/domain search filters.
+
+### Articles page
+
+`/feeds/:feedId/articles` shows articles for one feed.
+
+Behavior:
+
+- Pagination is `?page=N`, 20 articles per page.
+- Sorted by `published DESC`, with null dates last.
+- Optional inclusive date filtering with `?from=YYYY-MM-DD` and `?to=YYYY-MM-DD`.
+- Relative article links are resolved against `html_url` first, then `xml_url`.
+
+### Reader page
+
+`/reader?date=YYYY-MM-DD` shows all articles across enabled feeds for one UTC day.
+
+Behavior:
+
+- Defaults to today in UTC if `date` is missing or invalid.
+- Uses the article's effective date: `published`, or `added` if `published` is null.
+- Excludes disabled feeds.
+- Splits featured feeds into a separate section when present.
+- Groups articles by feed.
+- Has previous/next day navigation and a date picker.
+- Has no pagination.
+
+### Manual crawl dispatch
+
+`/dispatch-crawl` renders a simple admin page with a button that dispatches a crawl for all enabled feeds.
+
+Submitting the form calls `POST /api/dispatch-crawl`, which:
+
+- creates a new `crawl_runs` row unless there are no enabled feeds
+- enqueues one crawl job per enabled feed
+- renders the result summary inline:
+  - `crawlRunId`
+  - `totalFeeds`
+  - `batchCount`
+
+## 3. Architecture
+
+### Stack
 
 | Layer | Technology |
 |---|---|
-| Runtime | Cloudflare Workers (V8) |
-| Web framework | Hono v4 |
+| Runtime | Cloudflare Workers |
+| HTTP framework | Hono |
 | Database | Cloudflare D1 (SQLite) |
-| Session store | Cloudflare KV |
-| Authentication | GitHub OAuth 2.0 |
-| Feed parsing | sax |
-| Tests | Vitest + @cloudflare/vitest-pool-workers |
-| Dev tooling | Node.js, Wrangler CLI |
+| Session store | Cloudflare KV (`SESSIONS`) |
+| Queue | Cloudflare Queues (`feed-crawl-queue`) |
+| Feed parsing | `sax` |
+| Testing | Vitest + `@cloudflare/vitest-pool-workers` |
 
-### Request Flow
+### High-level request flow
 
-All incoming HTTP requests pass through `authMiddleware` (registered globally). The middleware:
+1. All requests pass through `authMiddleware` in `src/auth/middleware.js`.
+2. Public paths skip auth.
+3. Protected paths require a valid KV-backed session cookie.
+4. Route handlers fetch data and render HTML via view helpers.
+5. `renderLayout()` wraps authenticated pages in the shared sidebar shell.
 
-1. Checks if the path is a **public path** (exact match against a fixed list).
-2. For protected paths: reads the session cookie, validates the session in KV, and either continues or redirects to `/login?next=<original-url>`.
-3. On a valid session: stores the user's email on the Hono context (`c.set('email', ...)`) and applies **throttled session refresh** (KV write at most once per ~4.5 days for a 9-day session TTL).
+### Public paths
 
-**Public paths** (no auth required): `/login`, `/auth/start`, `/auth/callback`, `/logout`, `/logged-out`
+These exact paths are public:
 
-**Protected paths** (auth required): `/`, `/feeds`, `/feeds/add`, `/feeds/:feedId`, `/feeds/:feedId/articles`, `/api/feeds/add`, `/api/feeds/:feedId/toggle-crawl`, `/api/feeds/:feedId/toggle-featured`, `/crawl-history`, `/crawl-history/:crawlRunId`, `/reader`
+- `/login`
+- `/auth/start`
+- `/auth/callback`
+- `/logout`
+- `/logged-out`
 
-### Scheduled Job
+Everything else registered in `src/index.js` is protected.
 
-The Worker also exports a `scheduled` handler that runs the feed crawl once per day at 02:00 UTC (cron: `0 2 * * *`). It calls `performCrawl(env.DB)` and logs the summary. The handler uses `ctx.waitUntil` so the crawl completes even after the HTTP response has been returned.
+### Worker exports
 
-### Data Model
+The default Worker export in `src/index.js` provides:
 
-The application uses a **single-user-pool** model. All authenticated users share the same set of feeds, articles, and crawl history. There is no per-user subscription, preference, or read-tracking.
+- `fetch` - the Hono app
+- `scheduled` - daily crawl dispatch
+- `queue` - queue consumer for crawl and article-batch jobs
 
-### CSS Delivery
+### Server-side rendering
 
-Styles are defined in `src/styles.css` and imported as a text module (via a Wrangler `rules` entry). The layout function inlines CSS directly into the `<head>` of every HTML response — no external stylesheet requests.
+Views use Hono's `html` tag from `hono/html`.
 
-### Server-Side Rendering
+Important notes:
 
-HTML responses are generated using Hono's `html` tagged template literal (`import { html, raw } from 'hono/html'`). The `html` tag auto-escapes all interpolated values, eliminating manual `escapeHtml()` calls in view code. Nesting one `html` result inside another (e.g., a partial inside a page template) composes without double-escaping.
+- interpolated values are escaped by default
+- `raw()` is used only for trusted HTML fragments or inlined CSS
+- CSS is loaded from `src/styles.css` as a text module and inlined into every page
 
-**`raw()` usage policy**: `raw()` is used only for content that must not be escaped:
-- The inlined CSS string (contains `<`, `>`, `"` that are valid CSS, not HTML entities).
-- Pre-joined arrays of `HtmlEscapedString` items (e.g., `raw(items.join('\n'))`).
-- The `errorHtml` field in the add-feed flow (pre-built trusted HTML for duplicate-feed notices, passed through a `raw()` bridge in `renderAddFeedPage`).
+## 4. Authentication
 
-**View module organization**: Each page's HTML fragment is generated by a view function in `src/views/pages/<page-name>.js`. Shared page fragments (not-found block, notice banner) live in `src/views/partials.js`. Route handlers in `src/routes/` remain responsible for data fetching and business logic; they call the view function and pass the result as `content` to `renderLayout`.
+Authentication uses GitHub OAuth plus an allowlist of verified email addresses.
 
----
+Flow:
 
-## 2. Database Schema
+1. Unauthenticated access redirects to `/login?next=...`.
+2. `/auth/start` creates a one-time OAuth state token in KV.
+3. GitHub redirects back to `/auth/callback`.
+4. The callback exchanges the code for a token and fetches verified emails.
+5. Access is granted only if one verified email matches `ALLOWED_EMAILS`.
+6. A session is created in KV and a session cookie is set.
 
-### `feeds` table
-
-Created by migration `0001_create_feeds_table.sql`. Column `consecutive_failure_count` added by `0003_add_failure_count_to_feeds.sql`. A normalized unique index on `LOWER(TRIM(xml_url))` is added by `0006_add_unique_index_on_feed_xml_url.sql` to prevent duplicate feeds regardless of case or surrounding whitespace. Column `featured` added by `0008_add_featured_to_feeds.sql`.
-
-```sql
-CREATE TABLE feeds (
-  id                        TEXT PRIMARY KEY,
-  hostname                  TEXT NOT NULL,
-  type                      TEXT,
-  title                     TEXT NOT NULL,
-  xml_url                   TEXT,
-  html_url                  TEXT,
-  no_crawl                  INTEGER DEFAULT 0,
-  description               TEXT,
-  last_build_date           TEXT,
-  score                     REAL,
-  created_at                TEXT DEFAULT CURRENT_TIMESTAMP,
-  updated_at                TEXT DEFAULT CURRENT_TIMESTAMP,
-  consecutive_failure_count INTEGER DEFAULT 0,
-  featured                  INTEGER DEFAULT 0
-);
-CREATE INDEX idx_feeds_hostname ON feeds(hostname);
-```
-
-| Column | Notes |
-|---|---|
-| `id` | Primary key (string UUID from source data) |
-| `hostname` | Domain of the feed source; indexed for sort |
-| `type` | Feed format (e.g., `rss`, `atom`); nullable |
-| `title` | Human-readable name |
-| `xml_url` | URL to the RSS/Atom XML |
-| `html_url` | URL to the feed's website |
-| `no_crawl` | `1` to exclude from crawling; `0` to include |
-| `description` | Optional description |
-| `last_build_date` | When feed was last updated (ISO 8601) |
-| `score` | Numeric quality/ranking score |
-| `created_at`, `updated_at` | Auto-managed timestamps |
-| `consecutive_failure_count` | Count of consecutive crawl failures; reset to 0 on success or when crawling is re-enabled |
-| `featured` | `1` to feature in the reader view; `0` for normal display |
-
-### `articles` table
-
-Created by migration `0002_create_articles_table.sql`.
-
-```sql
-CREATE TABLE articles (
-  id         TEXT PRIMARY KEY,
-  feed_id    TEXT,
-  link       TEXT,
-  title      TEXT,
-  published  TEXT,
-  updated    TEXT,
-  added      TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_articles_feed_published ON articles(feed_id, published);
-```
-
-| Column | Notes |
-|---|---|
-| `id` | Primary key — for imported articles: string UUID from source; for crawled articles: `{feedId}:{guid-or-link}` |
-| `feed_id` | References `feeds.id`; no FK constraint |
-| `link` | URL to the article; nullable |
-| `title` | Article title |
-| `published` | **Must be ISO 8601 text** (`YYYY-MM-DD` or `YYYY-MM-DDThh:mm:ssZ`); date filtering depends on this |
-| `updated` | Date article was updated; nullable |
-| `added` | Date added to the database; nullable |
-| `created_at` | Row insert timestamp |
-
-**Index**: The composite index `(feed_id, published)` covers both the full query pattern (feed + date filtering, sorted by date) and feed-only lookups (leftmost-prefix rule).
-
-**No foreign key constraints**: Articles referencing deleted feeds are not removed automatically.
-
-### `crawl_runs` table
-
-Created by migration `0004_create_crawl_runs_table.sql`, simplified by migrations `0010` and `0011`. One row per scheduled crawl execution (header row only — no denormalized totals).
-
-```sql
-CREATE TABLE crawl_runs (
-  id         TEXT PRIMARY KEY,
-  started_at TEXT NOT NULL,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_crawl_runs_started_at ON crawl_runs(started_at DESC);
-```
-
-The three summary columns (`total_feeds_attempted`, `total_feeds_failed`, `total_articles_added`) were removed by migration `0010`. Totals are derived at query time via `LEFT JOIN` aggregation over `crawl_run_details`. `completed_at` was removed by migration `0011` — it was never written to and there is no mechanism to determine run completion time in the queue fan-out architecture.
-
-### `crawl_run_details` table
-
-Created by migration `0005_create_crawl_run_details_table.sql`. One row per feed per crawl run.
-
-```sql
-CREATE TABLE crawl_run_details (
-  crawl_run_id    TEXT NOT NULL,
-  feed_id         TEXT NOT NULL,
-  status          TEXT NOT NULL,
-  articles_added  INTEGER NOT NULL,
-  error_message   TEXT,
-  auto_disabled   INTEGER DEFAULT 0,
-  created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (crawl_run_id, feed_id)
-);
-```
-
-`status` values: `success`, `failed`, `auto_disabled`.
-
-### Applying Migrations
-
-```bash
-# Local development
-npx wrangler d1 migrations apply feed-reader-db --local
-
-# Production
-npx wrangler d1 migrations apply feed-reader-db --remote
-```
-
-> **Important**: Do not apply migrations to the remote environment without explicit instructions from the project owner. This project uses manual migrations and deploys only.
-
----
-
-## 3. Authentication System
-
-### GitHub OAuth Flow
-
-```
-User visits /            → redirect to /login?next=/
-User visits /login       → renders login page with link to /auth/start?next=%2F
-User clicks link         → GET /auth/start
-  - Creates CSRF state token in KV (10-minute TTL)
-  - Redirects to github.com/login/oauth/authorize
-GitHub redirects to      → GET /auth/callback?code=...&state=...
-  - Validates and consumes state token (one-time use)
-  - Exchanges code for GitHub access token
-  - Fetches user's verified emails from GitHub API
-  - Checks email against ALLOWED_EMAILS secret (comma-separated, case-insensitive)
-  - Match → create session in KV, set cookie, redirect to original URL
-  - No match → 403 Access Denied
-```
-
-### Session Management
+### Session model
 
 | Property | Value |
 |---|---|
 | Cookie name | `feed_reader_session` |
-| Cookie attributes | `HttpOnly; Secure; SameSite=Lax; Path=/` |
-| KV key format | `session:{uuid}` |
-| KV value | JSON: `{ email, createdAt }` |
-| Default TTL | 777600 seconds (9 days), set via `SESSION_TTL_SECONDS` var |
+| Cookie attributes | `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=<ttl>` |
+| KV key | `session:{uuid}` |
+| KV value | JSON with `email` and `createdAt` |
+| Default TTL | `777600` seconds (9 days) |
 
-**Throttled refresh**: Sessions are refreshed (new TTL + new cookie header) only when `Date.now() - session.createdAt >= TTL / 2`. For a 9-day TTL this means at most one KV write per ~4.5 days per active session. This prevents excessive KV writes from frequent users.
+Session refresh is throttled. After a session is validated, the middleware only refreshes KV and reissues the cookie once half the TTL has elapsed.
 
-### OAuth State Tokens (CSRF protection)
+### OAuth state tokens
 
 | Property | Value |
 |---|---|
-| KV key format | `oauth_state:{uuid}` |
-| KV value | JSON: `{ nextUrl }` |
+| KV key | `oauth_state:{uuid}` |
+| Value | JSON with `nextUrl` |
 | TTL | 10 minutes |
-| Usage | One-time: consumed (deleted) on first use |
+| Use | one-time, consumed on first valid callback |
 
-State token creation happens at `/auth/start`, not on the login page view, to avoid KV writes from bot traffic scanning `/login`.
+### Redirect safety
 
-### Redirect Safety
+The post-login `next` target must:
 
-After login, the `nextUrl` is validated before redirecting:
-- Must start with `/` (relative, not external)
-- Must not start with `//` (protocol-relative redirect)
-- Must not contain `\r` or `\n` (header injection)
+- start with `/`
+- not start with `//`
+- not contain carriage return or newline characters
 
-### Managing Access
+## 5. Database
 
-To **grant access** to a new user, update the `ALLOWED_EMAILS` secret with the full comma-separated list (including existing users):
+### `feeds`
+
+Stores feed metadata and crawl state.
+
+Important columns:
+
+- `id` - primary key
+- `hostname`
+- `title`
+- `xml_url`
+- `html_url`
+- `no_crawl` - `1` means disabled
+- `consecutive_failure_count`
+- `featured`
+- `created_at`, `updated_at`
+
+Key migrations:
+
+- `0001_create_feeds_table.sql`
+- `0003_add_failure_count_to_feeds.sql`
+- `0006_add_unique_index_on_feed_xml_url.sql`
+- `0008_add_featured_to_feeds.sql`
+
+The unique index on `LOWER(TRIM(xml_url))` prevents duplicate feeds with case or whitespace differences.
+
+### `articles`
+
+Stores article metadata only, not full article content.
+
+Important columns:
+
+- `id`
+- `feed_id`
+- `link`
+- `title`
+- `published`
+- `updated`
+- `added`
+- `created_at`
+
+Notes:
+
+- Imported articles may use source UUID-style IDs.
+- Crawled articles use `{feedId}:{guid-or-link}`.
+- `published` should be ISO 8601 text.
+
+Key migrations:
+
+- `0002_create_articles_table.sql`
+- `0007_add_effective_date_index_on_articles.sql`
+- `0009_remove_duplicate_imported_articles.sql`
+
+`0007` adds the expression index used by the daily reader query:
+
+- `DATE(COALESCE(published, added))`
+
+`0009` is a data cleanup migration that removes imported duplicate articles when a crawled duplicate for the same `(feed_id, link)` already exists.
+
+### `crawl_runs`
+
+One row per crawl dispatch.
+
+Important columns:
+
+- `id`
+- `started_at`
+- `created_at`
+
+Totals are not stored on the row. They are derived from `crawl_run_details`.
+
+Key migrations:
+
+- `0004_create_crawl_runs_table.sql`
+- `0010_simplify_crawl_runs_table.sql`
+- `0011_remove_completed_at_from_crawl_runs.sql`
+
+### `crawl_run_details`
+
+One row per feed per crawl run.
+
+Important columns:
+
+- `crawl_run_id`
+- `feed_id`
+- `status`
+- `articles_added`
+- `error_message`
+- `auto_disabled`
+
+Status values:
+
+- `success`
+- `failed`
+- `auto_disabled`
+
+### Migration rules
+
+Local migrations:
 
 ```bash
-npx wrangler secret put ALLOWED_EMAILS
-# Enter: existing@example.com,newuser@example.com
+npx wrangler d1 migrations apply feed-reader-db --local
 ```
 
-`wrangler secret put` replaces the entire value, so always supply the complete list. Only **verified** email addresses from GitHub are checked.
+Remote migrations:
 
-To **revoke access**, run the same command and omit the email from the list. Note that any active session for that user will continue until it expires (up to `SESSION_TTL_SECONDS`). There is no mechanism to immediately invalidate a specific user's session short of deleting the KV key directly via the Cloudflare dashboard (`SESSIONS` namespace, key: `session:{sessionId}`).
+```bash
+npx wrangler d1 migrations apply feed-reader-db --remote
+```
 
----
+Do not apply remote migrations without explicit instruction from the project owner.
 
-## 4. Pages and Features
-
-### Global Navigation Header
-
-All authenticated pages render a shared header via `renderLayout` in `src/layout.js`. The header contains:
-
-- **Primary nav**: Home (`/`), Feeds List (`/feeds`), Crawl History (`/crawl-history`)
-- **Account nav**: Logout (`/logout`), visually separated from primary links via `margin-left: auto`
-
-The active link is determined by an internal `getActiveSection(currentPath)` helper:
-- Exact match on `/` → Home is active
-- Prefix match on `/feeds` or `/api/feeds` → Feeds List is active
-- Prefix match on `/crawl-history` → Crawl History is active
-- Prefix match on `/reader` → Reader is active
-- No match or `currentPath` omitted → no active state
-
-The active link receives `aria-current="page"` and a `nav-link-active` CSS class (which applies bold font-weight and underline — providing contrast beyond color alone for WCAG compliance).
-
-Route handlers pass `currentPath: c.req.path` to `renderLayout`. When `isAuthenticated` is false or `currentPath` is omitted, the header is not rendered (e.g., public pages like `/login`, `/logged-out`).
-
----
-
-### Home (`/`)
-
-Protected. Simple landing page with navigation to `/feeds`.
-
-### Login (`/login`)
-
-Public. Renders a "Login with GitHub" link pointing to `/auth/start?next={encoded-next}`. The `next` query param carries the originally-requested URL through the auth flow.
-
-### Feeds List (`/feeds`)
-
-Protected. Displays all feeds with pagination, including feeds imported by CLI and feeds added from the UI.
-
-- **Sort**: By `hostname ASC`
-- **Page size**: 50 feeds per page
-- **Pagination**: `?page=N` (1-indexed). Out-of-bounds pages are clamped to the last valid page (200 response, no redirect).
-- **Disabled filter**: `?disabled=1` filters the list to show only disabled (`no_crawl = 1`) feeds. A "Show disabled only" / "Clear filter" link toggles this view.
-- **Page actions**: includes an `Add Feed` link to `/feeds/add`
-- **Per feed**: feed title (links to `/feeds/{feedId}` detail page), feed hostname (subordinate text), crawl status badge (`Crawling` or `Disabled`), `Visit Website` link to `html_url` (only shown when `html_url` is not null), and an Enable/Disable toggle button.
-- **Crawl toggle**: Submits `POST /api/feeds/{feedId}/toggle-crawl`. Uses POST-redirect-GET (303) so back/refresh does not re-POST.
-- **Add-feed banners**: after confirming a new feed, `/feeds` can show a success banner plus either an "initial crawl in progress", "initial crawl completed", or "initial crawl failed" message based on the matching `crawl_run_details` row.
-- **XSS protection**: All feed data is auto-escaped by Hono's `html` tagged template literal before rendering.
-
-### Feed Detail (`/feeds/:feedId`)
-
-Protected. Displays metadata and recent activity for a single feed.
-
-- Returns **404** if the feed ID is not found.
-- **Feed metadata**: hostname, website URL (`html_url`), feed URL (`xml_url`), description (each shown only when not null).
-- **Admin metadata**: crawl status badge, consecutive failure count, last build date, score, created/updated timestamps.
-- **Featured badge**: When a feed has `featured = 1`, a "Featured" badge is displayed next to the feed title.
-- **Recent crawl activity**: The last 5 crawl run detail rows for this feed, showing status, date, articles added, and any error message.
-- **Actions**: View Articles link to `/feeds/{feedId}/articles`, Visit Website link (when `html_url` is present), Back to Feeds link, an Enable/Disable crawl toggle button, and a Feature/Unfeature toggle button.
-- **List context preservation**: The detail page receives `listPage` and `disabled` query params from the feeds list so that Back to Feeds and the toggle returnTo values both return the user to the correct list position and filter state.
-
-### Add Feed (`/feeds/add`)
-
-Protected. Renders the user-facing add-feed flow.
-
-- **Step 1**: Accepts either a website URL or a direct RSS/Atom URL.
-- **Step 2**: If the URL is a website, the Worker scans `<link>` tags plus a small list of common feed paths (`/feed`, `/rss`, `/atom.xml`, `/feed.xml`, `/feeds/atom`, `/feeds/rss`).
-- **Step 3**: If one feed is found, the page renders a confirmation screen; if multiple feeds are found, the user is shown a selection screen first.
-- **Fallback**: If no feeds are discovered on the site, the page offers a direct feed URL field without leaving `/feeds/add`.
-- **Back navigation**: The flow keeps the selected/discovered state in hidden form fields, so users can go back without temporary server-side state in KV or D1.
-
-### Add Feed Submit (`POST /api/feeds/add`)
-
-Protected. Handles the server-rendered add-feed flow.
-
-- **Validation**: URL validation, website scraping, duplicate checks, and feed preview extraction happen on the server.
-- **Duplicate handling**: Looks up existing feeds by normalized `xml_url` and also relies on the D1 unique index to prevent concurrent duplicate inserts.
-- **Feed creation**: Creates a new `feeds` row with discovered `title`, `description`, `html_url`, `type`, and `last_build_date`.
-- **Immediate crawl**: Schedules `performFeedCrawl()` with `c.executionCtx.waitUntil(...)` so the confirm response redirects immediately while the first crawl runs in the background.
-
-### Articles List (`/feeds/:feedId/articles`)
-
-Protected. Displays articles for a single feed.
-
-- Returns **404** if the feed ID is not found.
-- **Sort**: `published DESC`, NULLs last
-- **Page size**: 20 articles per page
-- **Pagination**: `?page=N` (1-indexed). Same clamping behavior as feeds.
-- **Date filtering**: `?from=YYYY-MM-DD` and/or `?to=YYYY-MM-DD` (both inclusive). Invalid values are silently ignored.
-- Pagination links preserve active filter params (e.g., `?from=2026-01-01&page=2`).
-- **Date display**: `Mar 23, 2026` format (UTC locale); NULL dates show "Date unknown"
-- **Empty state** (no articles at all): "No articles available for this feed" — filter form hidden
-- **Empty state** (filter active, no matches): Filter form shown + "No articles match the current filter"
-- **Article link resolution**: Relative article URLs are resolved to absolute URLs using the feed's `html_url` (preferred) or `xml_url` as the base.
-
-### Reader (`/reader`)
-
-Protected. Cross-feed daily article view — shows all articles across enabled feeds whose effective date matches the selected UTC day.
-
-- **Route**: `GET /reader?date=YYYY-MM-DD`
-- **Date param**: `?date=YYYY-MM-DD`; defaults to today's UTC date if absent or invalid (non-`YYYY-MM-DD`).
-- **Effective-date rule**: An article's effective date is `published` when non-null, otherwise `added`. Both `DATE('2026-03-24')` and `DATE('2026-03-24T02:00:00.000Z')` resolve to `2026-03-24` via SQLite's `DATE()` function, so the rule works for both date-only and full ISO timestamp formats.
-- **UTC interpretation**: All date selection and display uses UTC to avoid off-by-one day errors near midnight.
-- **Disabled feeds excluded**: Feeds with `no_crawl = 1` are excluded from the query.
-- **Featured section**: Articles from feeds with `featured = 1` are grouped into a visually distinct "Featured" section at the top of the page. The section is omitted entirely when no featured feeds have articles for the selected day. Featured feeds are marked on the feed detail page via the Feature/Unfeature toggle.
-- **Grouping**: Within both the featured and regular sections, articles are grouped by feed. Groups are sorted by article count descending, with feed title ascending as a tie-breaker. Within each group, articles are ordered newest-first.
-- **No pagination**: All matching articles for the day are shown. A single day across all feeds is expected to be a manageable count.
-- **Date navigation**: The page includes Previous/Next day links (always explicit `?date=` values) and a date picker form that submits `GET /reader`.
-- **Empty state**: If no articles match the selected day, a "No articles found for this date" message is shown. Date navigation controls remain visible.
-- **Article link resolution**: Article URLs that are relative paths (e.g. `/2017/09/article.html`) are resolved to absolute URLs using the feed's `html_url` (preferred) or `xml_url` as the base.
-- **XSS protection**: All feed titles, article titles, and article links are auto-escaped by Hono's `html` tagged template literal before rendering.
-
-### Crawl History (`/crawl-history`)
-
-Protected. Lists the most recent 30 crawl runs, newest first. Shows started time, feeds attempted, feeds failed, and articles added for each run. Links to the per-run detail page.
-
-### Crawl Run Detail (`/crawl-history/:crawlRunId`)
-
-Protected. Shows per-feed results for a single crawl run. Each row shows the feed name (linked to the feed website), articles added, status badge (`Success`, `Failed`, or `Auto-disabled`), and any error message. Returns 404 if the run ID is not found.
-
-- **Failed-only filter**: `?failed=1` filters the detail rows to show only feeds with `failed` or `auto_disabled` status. A "Show failed only" / "Show all" toggle link switches between views.
-
-### Toggle Feed Crawl (`POST /api/feeds/:feedId/toggle-crawl`)
-
-Protected. Flips the `no_crawl` flag for a feed:
-- Disabling: sets `no_crawl = 1`
-- Enabling: sets `no_crawl = 0` **and** resets `consecutive_failure_count = 0` (fresh start)
-
-Redirects to the `returnTo` form field value (defaulting to `/feeds`) with 303 on success. Returns 404 if feed not found.
-
-### Toggle Featured (`POST /api/feeds/:feedId/toggle-featured`)
-
-Protected. Flips the `featured` flag for a feed:
-- `featured = 0` → sets `featured = 1` (feed articles appear in the reader's Featured section)
-- `featured = 1` → sets `featured = 0` (feed articles appear in the regular section)
-
-Also updates `updated_at` to the current timestamp. Redirects to the `returnTo` form field value (defaulting to `/feeds`) with 303 on success. Returns 404 if feed not found.
-
-### Logout (`/logout`)
-
-Public. Deletes the session from KV, clears the cookie, and redirects to `/logged-out`.
-
----
-
-## 5. Feed Crawling
+## 6. Crawling
 
 ### Schedule
 
-The crawl runs automatically once per day at **02:00 UTC** via a Cloudflare cron trigger (`0 2 * * *`). This is configured in `wrangler.jsonc` under `triggers.crons`.
+The Worker dispatches a crawl daily at `02:00 UTC` via the cron trigger in `wrangler.jsonc`:
 
-### Crawl Architecture: Dispatch + Queue Consumer
-
-The scheduled crawl uses a two-phase fan-out pipeline backed by **Cloudflare Queues** (`feed-crawl-queue`):
-
-**Phase 1 — Dispatcher** (`dispatchCrawl`, called from the `scheduled` handler):
-1. Queries all enabled feed IDs (`no_crawl = 0`) from D1.
-2. Generates a shared `crawlRunId` (UUID) and `startedAt` timestamp.
-3. Inserts the `crawl_runs` header row (id and started_at only).
-4. Enqueues **one message per feed**, each carrying `{ type: 'crawl', crawlRunId, startedAt, feedId }`. Messages are sent to the queue in batches of 100 (the Cloudflare `sendBatch` limit).
-5. Returns `{ crawlRunId, totalFeeds, batchCount }` for logging (`batchCount` is the number of `sendBatch` calls).
-
-This is lightweight and fast — it only touches D1 once (for the header row) and fires messages to the queue.
-
-**Phase 2 — Queue Consumer: crawl job** (`processCrawlJob`, called from the `queue` handler):
-Each `type: 'crawl'` message represents a single feed. The consumer invocation:
-1. Fetches the full feed object by ID via `getFeedById`.
-2. Fetches the RSS/Atom XML (30-second timeout, `FeedReader/1.0` user agent) and parses it into prepared article objects.
-3. On success: resets `consecutive_failure_count` to 0.
-4. On failure: increments `consecutive_failure_count`. If it reaches **5**, auto-disables the feed (`no_crawl = 1`).
-5. Records a `crawl_run_details` row for the feed (with `articles_added = 0`).
-6. Batches the parsed articles into groups of 20 and enqueues each batch as a `type: 'article-batch'` message for Phase 3.
-
-**Phase 3 — Queue Consumer: article batch** (`processArticleBatchJob`, called from the `queue` handler):
-Each `type: 'article-batch'` message carries up to 20 prepared articles. The consumer invocation:
-1. Inserts each article into the `articles` table (`ON CONFLICT DO NOTHING`).
-2. Increments `articles_added` on the corresponding `crawl_run_details` row by the number of newly inserted articles.
-
-This three-phase design keeps each queue job well within the Cloudflare Workers limit of 50 D1 calls per invocation: crawl jobs use ~3–4 calls, and article-batch jobs use up to 21 (20 inserts + 1 count update).
-
-If a consumer throws before acking, the queue will retry the message (up to `max_retries` times, currently 3, with `max_batch_size: 1`, `max_batch_timeout: 0`).
-
-**Crawl history totals** (feeds attempted, feeds failed, articles added) are not stored on the `crawl_runs` row. They are derived at query time via `LEFT JOIN` aggregation over `crawl_run_details`, which eliminates any need for end-of-crawl coordination across consumers.
-
-**Single-feed path** (`performFeedCrawl`): used immediately after a user adds a feed via the UI. It inserts its own `crawl_runs` row and delegates to `processCrawlJob` with `queue = null`, which inserts articles directly instead of enqueuing batches. This avoids the queue round-trip for the add-feed flow and keeps the banner feedback immediate.
-
-### Article ID Derivation
-
-For crawled articles, IDs are derived as `{feedId}:{guid-or-link}`:
-- RSS: uses `<guid>` text content, falls back to `<link>`
-- Atom: uses `<id>` element, falls back to `<link href>`
-- Articles with no guid and no link are skipped.
-
-This makes IDs stable across re-crawls so upsert deduplication works correctly.
-
-### Auto-Disable on Failure
-
-If a feed fails to crawl 5 consecutive times, it is automatically disabled. The feed:
-- Has `no_crawl` set to `1`
-- Shows as `Disabled` on the Feeds page
-- Is marked `Auto-disabled` in crawl history detail
-- Can be re-enabled from the Feeds page; re-enabling also resets the failure count to 0.
-
-### Local Testing
-
-To trigger the scheduled crawl handler locally:
-
-```bash
-# Start dev server with scheduled event support
-npx wrangler dev --test-scheduled
-
-# In another terminal, trigger the cron
-curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
+```json
+"triggers": { "crons": ["0 2 * * *"] }
 ```
 
-Note: local testing of the queue consumer path requires `wrangler dev` with queue support. The `dispatchCrawl` call will enqueue messages, but the `queue` handler will only fire if wrangler's local queue simulation is running. In practice, the consumer path is most easily tested via `npm test`.
+### Crawl pipeline
 
-### Article ID Derivation
+The crawl system is queue-backed and has three phases.
 
-For crawled articles, IDs are derived as `{feedId}:{guid-or-link}`:
-- RSS: uses `<guid>` text content, falls back to `<link>`
-- Atom: uses `<id>` element, falls back to `<link href>`
-- Articles with no guid and no link are skipped.
+#### Phase 1: dispatch
 
-This makes IDs stable across re-crawls so upsert deduplication works correctly.
+Implemented by `dispatchCrawl(db, queue)` in `src/crawl.js`.
 
-### Auto-Disable on Failure
+It:
 
-If a feed fails to crawl 5 consecutive times, it is automatically disabled. The feed:
-- Has `no_crawl` set to `1`
-- Shows as `Disabled` on the Feeds page
-- Is marked `Auto-disabled` in crawl history detail
-- Can be re-enabled from the Feeds page; re-enabling also resets the failure count to 0.
+1. reads all enabled feed IDs (`no_crawl = 0`)
+2. creates a shared `crawlRunId` and `startedAt`
+3. inserts the `crawl_runs` header row
+4. sends one `type: 'crawl'` message per feed
 
-### Local Testing
+Dispatch messages are sent in chunks of 100, which matches the Cloudflare `sendBatch()` limit.
 
-To trigger the scheduled crawl handler locally:
+If there are no enabled feeds, dispatch returns:
 
-```bash
-# Start dev server with scheduled event support
-npx wrangler dev --test-scheduled
-
-# In another terminal, trigger the cron
-curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
+```js
+{ crawlRunId: null, totalFeeds: 0, batchCount: 0 }
 ```
 
----
+#### Phase 2: crawl job
 
-## 6. Configuration Reference
+Implemented by `processCrawlJob(db, queue, job)`.
 
-### `wrangler.jsonc` Summary
+Per feed, it:
 
-```jsonc
-{
-  "name": "feed-reader",
-  "main": "src/index.js",
-  "compatibility_date": "2026-03-10",
-  "compatibility_flags": ["nodejs_compat"],
-  "rules": [{ "type": "Text", "globs": ["**/*.css"] }],
-  "routes": [{ "pattern": "reader.kixx.news", "custom_domain": true }],
-  "kv_namespaces": [{ "binding": "SESSIONS", "id": "<kv-namespace-id>" }],
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "feed-reader-db",
-    "database_id": "<d1-database-id>",
-    "migrations_dir": "migrations"
-  }],
-  "triggers": {
-    "crons": ["0 2 * * *"]
-  },
-  "queues": {
-    "producers": [{ "binding": "CRAWL_QUEUE", "queue": "feed-crawl-queue" }],
-    "consumers": [{
-      "queue": "feed-crawl-queue",
-      "max_batch_size": 1,
-      "max_batch_timeout": 0,
-      "max_retries": 3
-    }]
-  },
-  "observability": { "enabled": true },
-  "keep_vars": true,
-  "vars": {
-    "SESSION_TTL_SECONDS": "777600",
-    "GITHUB_OAUTH_CALLBACK_URL": "https://reader.kixx.news/auth/callback"
-  }
-}
-```
+1. loads the feed row
+2. fetches the feed XML with a 30-second timeout
+3. parses RSS or Atom
+4. records success or failure
+5. resets or increments failure count
+6. auto-disables the feed after 5 consecutive failures
+7. records a `crawl_run_details` row
+8. enqueues article batches when running through the queue path
 
-**`queues` section notes:**
-- `max_batch_size: 1` — each consumer invocation receives exactly one queue message (one feed per message). This ensures each feed crawl is isolated in its own invocation.
-- `max_batch_timeout: 0` — consumer is triggered immediately when a message arrives rather than waiting to batch.
-- `max_retries: 3` — a consumer that throws without acking is retried up to 3 times before the message is discarded. Without this, Cloudflare's default retry behavior applies (implementation-defined).
-- The queue `feed-crawl-queue` must be created in Cloudflare before deploying (see First-Time Setup).
+Normalized user-facing crawl errors are intentionally simple:
 
-### Environment Variables (`vars`)
+- invalid XML -> `Failed to parse the feed XML`
+- network and fetch failures -> `Could not reach the feed URL (network error or server unavailable)`
 
-| Variable | Description | Default |
-|---|---|---|
-| `SESSION_TTL_SECONDS` | Session lifetime in seconds | `"777600"` (9 days) |
-| `GITHUB_OAUTH_CALLBACK_URL` | Full callback URL registered with GitHub OAuth App | `"https://reader.kixx.news/auth/callback"` |
+#### Phase 3: article-batch job
+
+Implemented by `processArticleBatchJob(db, job)`.
+
+Each message carries up to 20 prepared articles. The consumer:
+
+1. inserts each article with `ON CONFLICT(id) DO NOTHING`
+2. increments `crawl_run_details.articles_added` by the number of new inserts
+
+Article-batch messages are also sent to the queue in chunks of 100 messages.
+
+### Single-feed crawl after add
+
+When a user adds a feed through the UI, the system immediately starts a background crawl with `performFeedCrawl()`.
+
+This path:
+
+- creates its own `crawl_runs` row
+- calls `processCrawlJob()` with `queue = null`
+- inserts articles directly instead of enqueueing article-batch messages
+
+That keeps the add-feed redirect fast while still recording crawl history.
+
+### Auto-disable behavior
+
+After 5 consecutive crawl failures:
+
+- `no_crawl` is set to `1`
+- the feed stops participating in scheduled and manual dispatches
+- crawl history shows `auto_disabled`
+
+Re-enabling a feed from the UI resets `consecutive_failure_count` to `0`.
+
+## 7. Routes and Behavior
+
+### Feed management routes
+
+| Route | Purpose |
+|---|---|
+| `GET /feeds` | feed list |
+| `GET /feeds/add` | add-feed page |
+| `POST /api/feeds/add` | add-feed submission |
+| `GET /feeds/:feedId` | feed detail |
+| `GET /feeds/:feedId/articles` | feed articles |
+| `POST /api/feeds/:feedId/toggle-crawl` | enable or disable crawling |
+| `POST /api/feeds/:feedId/toggle-featured` | feature or unfeature feed |
+
+`returnTo` for both toggle endpoints must start with `/feeds`, otherwise the redirect falls back to `/feeds`.
+
+### Crawl routes
+
+| Route | Purpose |
+|---|---|
+| `GET /crawl-history` | list recent crawl runs |
+| `GET /crawl-history/:crawlRunId` | show per-feed crawl results |
+| `GET /dispatch-crawl` | manual dispatch page |
+| `POST /api/dispatch-crawl` | trigger dispatch immediately |
+
+### Reader and auth routes
+
+| Route | Purpose |
+|---|---|
+| `GET /` | home page |
+| `GET /reader` | daily cross-feed reader |
+| `GET /login` | login page |
+| `GET /auth/start` | begin GitHub OAuth |
+| `GET /auth/callback` | GitHub OAuth callback |
+| `GET /logout` | delete session and clear cookie |
+| `GET /logged-out` | logged-out confirmation page |
+
+## 8. Configuration
+
+Primary config lives in `wrangler.jsonc`.
+
+Important settings:
+
+- entrypoint: `src/index.js`
+- compatibility date: `2026-03-10`
+- `nodejs_compat` enabled
+- CSS imported as text via a Wrangler rule
+- custom domain route: `reader.kixx.news`
+- D1 binding: `DB`
+- KV binding: `SESSIONS`
+- Queue producer binding: `CRAWL_QUEUE`
+- queue name: `feed-crawl-queue`
+- queue consumer:
+  - `max_batch_size: 1`
+  - `max_batch_timeout: 0`
+  - `max_retries: 3`
+- cron: `0 2 * * *`
+- observability enabled
+
+### Vars
+
+| Var | Purpose |
+|---|---|
+| `SESSION_TTL_SECONDS` | session lifetime |
+| `GITHUB_OAUTH_CALLBACK_URL` | OAuth callback URL |
 
 ### Secrets
 
-Set via `npx wrangler secret put <NAME>`. **Never commit these to source control.**
-
-| Secret | Description |
+| Secret | Purpose |
 |---|---|
-| `GITHUB_CLIENT_ID` | GitHub OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret |
-| `ALLOWED_EMAILS` | Comma-separated list of permitted email addresses (e.g., `alice@example.com,bob@example.com`); whitespace around commas is ignored; matching is case-insensitive; only verified GitHub emails are checked |
+| `GITHUB_CLIENT_ID` | GitHub OAuth client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth client secret |
+| `ALLOWED_EMAILS` | comma-separated allowlist of verified emails |
 
-Secrets are read at request time. **Redeployment is not required after changing secrets.**
+Secrets are runtime bindings and do not require redeploy after changes.
 
-### Local Development Secrets
+### Local development secrets
 
-For local development, create a `.dev.vars` file (gitignored) in the project root:
+Create `.dev.vars` in the project root for local OAuth and auth testing:
 
-```
+```dotenv
 GITHUB_CLIENT_ID=your_client_id
 GITHUB_CLIENT_SECRET=your_client_secret
 ALLOWED_EMAILS=you@example.com
 GITHUB_OAUTH_CALLBACK_URL=http://localhost:8787/auth/callback
 ```
 
-`GITHUB_OAUTH_CALLBACK_URL` must be set in `.dev.vars` for local OAuth to work; the value in `wrangler.jsonc` points to the production URL and will not match the local GitHub OAuth App. Wrangler loads `.dev.vars` automatically; its values override `wrangler.jsonc` vars during local development only and do not affect production.
+## 9. Development and Testing
 
----
-
-## 7. First-Time Setup
-
-### Prerequisites
-
-- Cloudflare account with Workers and D1 enabled
-- GitHub account with an OAuth App registered
-- Node.js and npm installed
-
-### Step 1: GitHub OAuth App
-
-1. Go to GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
-2. Set **Authorization callback URL** to `https://reader.kixx.news/auth/callback`
-3. Note the **Client ID** and generate a **Client Secret**
-
-For local development, create a second OAuth App with callback URL `http://localhost:8787/auth/callback`.
-
-### Step 2: Cloudflare Resources
-
-```bash
-# Create the D1 database
-npx wrangler d1 create feed-reader-db
-
-# Create the KV namespace
-npx wrangler kv namespace create SESSIONS
-
-# Create the crawl queue
-npx wrangler queues create feed-crawl-queue
-```
-
-Copy the returned `id` values into `wrangler.jsonc` under `d1_databases[0].database_id` and `kv_namespaces[0].id`. The queue name `feed-crawl-queue` is already correct in `wrangler.jsonc`; no ID to copy.
-
-### Step 3: Set Secrets
-
-```bash
-npx wrangler secret put GITHUB_CLIENT_ID
-npx wrangler secret put GITHUB_CLIENT_SECRET
-npx wrangler secret put ALLOWED_EMAILS
-```
-
-### Step 4: Apply Migrations
-
-```bash
-npx wrangler d1 migrations apply feed-reader-db --remote
-```
-
-### Step 5: Deploy
+### Install
 
 ```bash
 npm install
-npm run deploy
 ```
 
----
-
-## 8. Deployment
-
-> **Important**: Do not deploy without explicit instructions from the project owner. This project uses manual deploys only.
-
-### Deploy Command
+### Start the Worker locally
 
 ```bash
-npm run deploy
-# equivalent to: npx wrangler deploy
+npm start
 ```
 
-### Wrangler Commands Reference
+or:
 
 ```bash
-# Deploy
-npx wrangler deploy
-
-# Stream live logs
-npx wrangler tail
-
-# Apply database migrations (production)
-npx wrangler d1 migrations apply feed-reader-db --remote
-
-# Execute arbitrary SQL (production)
-npx wrangler d1 execute feed-reader-db --remote --command "SELECT COUNT(*) FROM feeds"
+npx wrangler dev
 ```
 
----
-
-## 9. Importing Data
-
-### Recover Failed Feeds
-
-`scripts/recover-failed-feeds.js` is a maintenance script for recovering feeds that have been failing to crawl, typically because a feed moved to a new URL. For each feed that failed in the most recent crawl run, it:
-
-1. Fetches the feed's `html_url` (the associated website) and runs feed discovery on it.
-2. If a new (different) `xml_url` is found and parses successfully, updates the feed record in the database.
-3. Inserts any articles found in the new feed (skipping duplicates).
-4. Resets `consecutive_failure_count` to 0 and re-enables the feed if it was auto-disabled.
+### Test the scheduled handler locally
 
 ```bash
-# Dry run — discover and report, no DB changes
-node scripts/recover-failed-feeds.js --env local --dry-run
-
-# Apply changes to local D1
-node scripts/recover-failed-feeds.js --env local
-
-# Apply changes to production D1
-node scripts/recover-failed-feeds.js --env remote
+npx wrangler dev --test-scheduled
+curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+2+*+*+*"
 ```
 
-Feeds with no `html_url`, unreachable websites, or websites with no discoverable feed are skipped and logged. The script prints a per-feed summary and a final count of recovered, skipped, and errored feeds.
+After using the dev server for validation, stop it so the port is free for normal development.
 
-### Sync Feeds to Remote
-
-`scripts/sync-feeds-to-remote.js` syncs the local D1 `feeds` table to the remote D1 `feeds` table. Useful when local feed data has been modified or bulk-imported and needs to be pushed to production.
-
-The script bulk-fetches all existing remote IDs in a single query, partitions local records into inserts and updates, then executes each batch via a SQL file (multiple statements per wrangler call).
+### Run tests
 
 ```bash
-# Dry run — no remote changes
+npm test
+```
+
+or:
+
+```bash
+npx vitest run
+```
+
+Tests run inside the Cloudflare Workers Vitest environment defined by `@cloudflare/vitest-pool-workers`.
+
+The test suite covers the major auth, feed, add-feed, reader, crawl-history, and crawl pipeline flows. It also includes coverage for feeds search/filter behavior and manual crawl dispatch.
+
+## 10. Scripts and Operations
+
+### Sync feeds to remote
+
+`scripts/sync-feeds-to-remote.js`
+
+```bash
 node scripts/sync-feeds-to-remote.js --dry-run
-
-# Live sync (default batch size: 100)
 node scripts/sync-feeds-to-remote.js
-
-# Custom batch size
 node scripts/sync-feeds-to-remote.js --batch-size=200
 ```
 
----
+This syncs the local `feeds` table to the remote D1 `feeds` table.
 
-## 10. Testing
+### Sync articles to remote
 
-### Running Tests
-
-```bash
-npm test               # run all tests
-npx vitest run         # same
-npx vitest --watch     # watch mode
-```
-
-### Test Environment
-
-Tests run inside the actual Cloudflare Workers runtime via `@cloudflare/vitest-pool-workers`. The test runner automatically provisions a local D1 instance and KV namespace from the bindings defined in `wrangler.jsonc`.
-
-### Test Helper Patterns
-
-```js
-// Unauthenticated request
-const response = await SELF.fetch('http://example.com/feeds');
-
-// Authenticated request (uses makeAuthenticatedRequest helper)
-const request = makeAuthenticatedRequest('http://example.com/feeds');
-const response = await SELF.fetch(request);
-
-// Capture redirect without following it
-const response = await SELF.fetch(url, { redirect: 'manual' });
-
-// Seed test data
-await seedFeeds([{ id: '1', hostname: 'example.com', title: 'Example', ... }]);
-await clearFeeds();
-await seedArticles([{ id: 'a1', feed_id: '1', title: 'Article', published: '2026-01-01', ... }]);
-await clearArticles();
-```
-
-### Coverage Areas
-
-- Unauthenticated access → redirect to login
-- Login page renders correctly
-- `/auth/start` creates state token and redirects to GitHub
-- OAuth callback validates state, checks email, creates session
-- Session refresh throttle (no KV write within TTL/2 window)
-- Feeds page: pagination, disabled filter, empty state, XSS escaping, crawl status badges, toggle links
-- Add-feed flow: URL validation, direct feed confirmation, website discovery, duplicate prevention, fallback direct-feed submission, and add-feed banners on `/feeds`
-- Articles page: pagination, date filtering, empty states, NULL published dates, XSS escaping
-- Crawl history: list page, detail page, 404 for unknown run
-- Toggle crawl: enables/disables feed, resets failure count on enable, 404 for unknown feed
-- Toggle featured: features/unfeatures feed, 404 for unknown feed, returnTo validation
-- Reader page: featured section rendering, featured section omission, article URL resolution
-- Logout: session deleted, cookie cleared
-
----
-
-## 11. Maintenance and Operations
-
-### Monitoring
+`scripts/sync-articles-to-remote.js`
 
 ```bash
-# Stream live logs from the deployed Worker
+node scripts/sync-articles-to-remote.js --dry-run
+node scripts/sync-articles-to-remote.js
+node scripts/sync-articles-to-remote.js --batch-size=200
+```
+
+This syncs the local `articles` table to the remote D1 `articles` table using upserts.
+
+### Recover failed feeds
+
+`scripts/recover-failed-feeds.js`
+
+```bash
+node scripts/recover-failed-feeds.js --env local --dry-run
+node scripts/recover-failed-feeds.js --env local
+node scripts/recover-failed-feeds.js --env remote
+```
+
+This script looks at feeds that failed in the most recent crawl run, tries discovery against each feed's `html_url`, and updates the feed if a new working `xml_url` is found.
+
+### Hydrate a template
+
+`scripts/hydrate-template.js`
+
+```bash
+node scripts/hydrate-template.js <template-file> <context-yaml-file>
+```
+
+### Operational commands
+
+Stream Worker logs:
+
+```bash
 npx wrangler tail
 ```
 
-Observability is enabled in `wrangler.jsonc` (`"observability": { "enabled": true }`).
-
-### Rotating Secrets
+Run a local D1 query:
 
 ```bash
-# Update GitHub OAuth credentials
-npx wrangler secret put GITHUB_CLIENT_ID
-npx wrangler secret put GITHUB_CLIENT_SECRET
-
-# Update allowed email list
-npx wrangler secret put ALLOWED_EMAILS
+npx wrangler d1 execute feed-reader-db --local --command "SELECT COUNT(*) FROM feeds"
 ```
 
-No redeployment required — secrets are read at request time.
-
-### Adding New Allowed Users
-
-Update the `ALLOWED_EMAILS` secret with the full comma-separated list (including existing users):
+Run a remote D1 query:
 
 ```bash
-npx wrangler secret put ALLOWED_EMAILS
-# Enter: existing@example.com,newuser@example.com
-```
-
-### Revoking Access
-
-Run `npx wrangler secret put ALLOWED_EMAILS` and omit the user's email from the new value. The change takes effect immediately for new login attempts. However, any active session for that user will continue until it expires (up to `SESSION_TTL_SECONDS` — 9 days by default).
-
-To immediately invalidate an active session, delete the session's KV key directly from the Cloudflare dashboard: navigate to **Workers & Pages → KV → SESSIONS namespace** and delete the key `session:{sessionId}`. The session ID is the value stored in the user's `feed_reader_session` cookie.
-
-### Database Queries (Production)
-
-```bash
-# Count feeds and articles
 npx wrangler d1 execute feed-reader-db --remote --command "SELECT COUNT(*) FROM feeds"
-npx wrangler d1 execute feed-reader-db --remote --command "SELECT COUNT(*) FROM articles"
-
-# Check crawl history
-npx wrangler d1 execute feed-reader-db --remote --command "SELECT * FROM crawl_runs ORDER BY started_at DESC LIMIT 5"
-
-# Find auto-disabled feeds
-npx wrangler d1 execute feed-reader-db --remote --command "SELECT id, title, consecutive_failure_count FROM feeds WHERE no_crawl = 1"
-
-# Re-enable a feed manually (use the UI toggle instead when possible)
-npx wrangler d1 execute feed-reader-db --remote --command "UPDATE feeds SET no_crawl = 0, consecutive_failure_count = 0 WHERE id = 'some-id'"
 ```
 
-### Adding a New Database Migration
+Do not deploy or run remote migrations unless explicitly instructed.
 
-1. Create a new file in `migrations/` following the naming pattern: `0009_description.sql` (or the next unused number)
-2. Write your `CREATE TABLE`, `ALTER TABLE`, or index SQL
-3. Apply locally: `npx wrangler d1 migrations apply feed-reader-db --local`
-4. Run tests: `npm test`
-5. Apply to production after deploying: `npx wrangler d1 migrations apply feed-reader-db --remote`
+### Note about package scripts
 
----
+`package.json` still defines:
 
-## 12. File Structure
+- `npm run import-feeds`
+- `npm run import-articles`
 
-```
-feed-reader/
-├── src/
-│   ├── index.js              # App entry: route registration, middleware wiring, scheduled handler
-│   ├── layout.js             # Shared HTML layout (renderLayout) using hono/html; global navigation with active-section logic
-│   ├── db.js                 # Database query helpers
-│   ├── crawl.js              # Feed crawl logic (performCrawl, XML parsing, article upsert)
-│   ├── feed-discovery.js     # Add-feed URL validation, website scraping, and feed preview loading
-│   ├── feed-utils.js         # Shared URL normalization and hostname helpers
-│   ├── html-utils.js         # escapeHtml() utility (used by api/add-feed.js for trusted HTML construction)
-│   ├── parser.js             # RSS/Atom XML parser (parseFeedXml, parseFeedPreview)
-│   ├── reader-utils.js       # Date helpers for the daily reader view (parseSelectedDate, getPreviousDate, getNextDate, formatDateForDisplay)
-│   ├── styles.css            # Stylesheet (imported as text, inlined into HTML)
-│   ├── auth/                 # Auth middleware, Sessions, OAuth
-│   ├── routes/               # Request handlers (data fetching, business logic)
-│   ├── views/
-│   │   ├── partials.js       # Shared page fragments: notFoundPage(), noticeBanner()
-│   │   └── pages/
-│   │       ├── home.js       # Home page content (homePage)
-│   │       ├── login.js      # Login page content (loginPage)
-│   │       ├── logged-out.js # Logged-out page content (loggedOutPage)
-│   │       ├── add-feed.js   # Add-feed page content (addFeedPage) — URL form, selection, confirmation
-│   │       ├── feeds.js      # Feeds list page content (feedsPage, addFeedBanner)
-│   │       ├── feed-detail.js # Feed detail page content (feedDetailPage)
-│   │       ├── articles.js   # Articles list page content (articlesPage)
-│   │       ├── crawl-history.js # Crawl history list and detail pages (crawlHistoryPage, crawlRunDetailPage)
-│   │       └── reader.js     # Daily reader page content (readerPage)
-├── migrations/               # SQL scripts as database migrations
-├── scripts/                  # CLI scripts and tools
-├── test/                     # All test cases
-├── plans/                    # Implementation plans (historical reference)
-├── wrangler.jsonc            # Cloudflare Workers configuration
-├── vitest.config.js          # Test configuration
-├── package.json
-├── .dev.vars                 # Local dev secrets (gitignored)
-├── CLAUDE.md                 # Agent instructions
-├── MANUAL.md                 # The complete documentation of the project for agents and humans
-└── README.md                 # Quick-start development commands and information for humans
-```
+But the referenced files `scripts/import-feeds.js` and `scripts/import-articles.js` are not present in this repository. Treat those commands as stale until the scripts are restored or removed.
 
-### Key Source Files
+## 11. Deployment and Setup Notes
 
-| File | Responsibility |
+This project uses manual deploys only.
+
+Typical Cloudflare resources:
+
+- one Worker
+- one D1 database: `feed-reader-db`
+- one KV namespace bound as `SESSIONS`
+- one Queue named `feed-crawl-queue`
+
+Typical setup tasks:
+
+1. create D1, KV, and Queue resources
+2. populate `wrangler.jsonc` bindings and IDs
+3. set secrets
+4. apply migrations
+5. deploy manually when instructed
+
+Do not deploy the Worker yourself unless explicitly asked.
+
+## 12. File Map
+
+Key files:
+
+| File | Purpose |
 |---|---|
-| `src/index.js` | Mounts middleware and all routes; exports the Hono app, `scheduled` handler (dispatches crawl), and `queue` handler (processes crawl batches) |
-| `src/layout.js` | `renderLayout` — wraps page content in the full HTML shell; uses `html` tag from `hono/html`; CSS is inlined via `raw(styles)` |
-| `src/db.js` | `getFeedsPaginated`, `getFeedById`, `getFeedByXmlUrl`, `createFeed`, `getArticlesByFeedPaginated`, `upsertFeed`, `getEnabledFeedIds`, `getFeedsByIds`, `insertArticle`, `getCrawlRuns`, `getCrawlRunById`, `getCrawlRunDetails`, `recordCrawlRun`, `recordCrawlRunDetail`, `incrementCrawlRunDetailArticlesAdded`, `updateFeedFailureCount`, `disableFeed`, `updateFeedCrawlStatus`, `resetFeedFailureCount`, `getCrawlRunDetailByFeed`, `getRecentActivityForFeed`, `getDailyReaderArticles`, `updateFeedFeatured` |
-| `src/crawl.js` | `dispatchCrawl` (cron dispatcher), `processCrawlJob` (queue consumer: fetch/parse/enqueue article batches), `processArticleBatchJob` (queue consumer: insert article batch), `performFeedCrawl` (single-feed immediate crawl for the add-feed flow, inserts directly) |
-| `src/feed-discovery.js` | Add-feed URL validation, website scraping, candidate discovery, and user-facing validation messages |
-| `src/feed-utils.js` | URL canonicalization, duplicate-comparison normalization, hostname derivation, and article URL resolution |
-| `src/html-utils.js` | `escapeHtml()` — used by `api/add-feed.js` when constructing trusted HTML strings for duplicate-feed notices |
-| `src/parser.js` | `parseFeedXml` (article extraction) and `parseFeedPreview` (feed-level metadata for the add-feed flow) |
-| `src/views/partials.js` | Shared page fragments: `notFoundPage(message?)`, `noticeBanner(type, contentHtml)` |
-| `src/views/pages/*.js` | Per-page view functions returning `HtmlEscapedString` via `html` tag; see directory listing above |
-| `src/routes/add-feed.js` | Add-feed page renderer (`renderAddFeedPage`) and hidden-state helpers (`serializeAddFeedState`, `deserializeAddFeedState`) |
-| `src/routes/api/add-feed.js` | Server-side add-feed workflow, duplicate handling, feed creation, and immediate crawl scheduling |
-| `src/routes/feed-detail.js` | Fetches feed data and delegates rendering to `feedDetailPage` view |
-| `src/auth/middleware.js` | Auth gate for all requests; session validation and throttled refresh |
-| `src/auth/session.js` | `createSession`, `getSession`, `refreshSession`, `deleteSession`, cookie helpers |
-| `src/auth/github.js` | `getAuthorizationUrl`, `exchangeCodeForToken`, `getUserEmails` |
-| `src/routes/articles.js` | Fetches articles and delegates rendering to `articlesPage` view |
-| `src/routes/crawl-history.js` | Fetches crawl run data and delegates rendering to `crawlHistoryPage` / `crawlRunDetailPage` views |
-| `src/routes/api/toggle-feed-crawl.js` | Enable/disable crawling for a single feed |
-| `src/routes/api/toggle-featured.js` | Feature/unfeature a feed for the reader view |
+| `src/index.js` | route registration, auth middleware, `scheduled`, and `queue` |
+| `src/layout.js` | shared page shell and sidebar |
+| `src/db.js` | database queries and mutations |
+| `src/crawl.js` | crawl dispatch and queue consumer logic |
+| `src/feed-discovery.js` | add-feed discovery and validation |
+| `src/parser.js` | RSS/Atom parsing |
+| `src/auth/` | OAuth, session, and auth middleware |
+| `src/routes/` | request handlers |
+| `src/views/pages/` | page-specific HTML renderers |
+| `src/routes/dispatch-crawl.js` | manual dispatch page |
+| `src/routes/api/dispatch-crawl.js` | manual dispatch action |
+| `src/views/pages/dispatch-crawl.js` | manual dispatch page HTML |
+| `migrations/` | schema and data migrations |
+| `scripts/` | maintenance and sync scripts |
+| `test/index.spec.js` | application test suite |
 
----
+## 13. Current Limitations
 
-## 13. Known Limitations
-
-| Area | Limitation |
-|---|---|
-| Multi-user | All users share the same feeds and articles; no per-user data |
-| Feed management | Users can add feeds from the UI, but there is still no UI for editing or deleting feeds |
-| Full-text search | No article content search |
-| Read tracking | No mark-as-read, bookmarks, or history |
-| Cascading deletes | Articles are not removed when a feed is deleted |
-| Rate limiting | No application-layer rate limiting; enforce via Cloudflare WAF if needed (particularly on `/auth/start` to limit KV writes) |
-| Crawl scheduling | Cron interval is fixed at daily (02:00 UTC); changing it requires editing `wrangler.jsonc` and redeploying |
-| Crawl concurrency | Each queue message represents a single feed. The number of concurrent consumer invocations is controlled by Cloudflare's queue delivery. There is no application-level cap on total concurrent consumers. |
-| Article content | Only article metadata is stored (title, link, dates); full article body is not fetched or stored |
-| Add-feed state | The multi-step add-feed flow serializes discovered candidates into hidden form fields; very large candidate sets would increase HTML form size |
-| Website discovery | Feed discovery only checks `<link>` metadata and a short list of common feed paths; JavaScript-rendered sites are not supported |
-| Session revocation | Removing a user from `ALLOWED_EMAILS` stops new logins but does not invalidate active sessions; immediate revocation requires manually deleting the KV key from the Cloudflare dashboard |
+- All authenticated users share the same feeds and articles.
+- There is no UI for editing or deleting feeds.
+- There is no article full-text search.
+- There is no read tracking, bookmarking, or user preference model.
+- Articles are metadata-only; article body content is not stored.
+- Feed detail preserves list page and disabled filter state, but not title/domain search state.
+- Add-feed discovery only uses HTML metadata and a short list of common feed paths; JavaScript-rendered discovery is not supported.
+- Session revocation is coarse-grained: removing an email from `ALLOWED_EMAILS` blocks future logins but does not instantly kill an active session.
+- There are no foreign keys or cascading deletes between `feeds` and `articles`.
