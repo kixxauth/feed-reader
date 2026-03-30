@@ -282,11 +282,14 @@ export async function processCrawlJob(db, queue, { crawlRunId, startedAt, feedId
 
 			for (let i = 0; i < articleBatches.length; i += SEND_BATCH_SIZE) {
 				const chunk = articleBatches.slice(i, i + SEND_BATCH_SIZE);
-				await queue.sendBatch(
-					chunk.map((articles) => ({
-						body: { type: 'article-batch', crawlRunId, feedId: feed.id, articles, startedAt },
-					}))
-				);
+
+				const batch = chunk.map((articles) => ({
+					body: { type: 'article-batch', crawlRunId, feedId: feed.id, articles, startedAt },
+				}));
+
+				console.log(`article-batch (length=${ chunk.length }, size=${ JSON.stringify(batch).length })`);
+
+				await queue.sendBatch(batch);
 			}
 		}
 	} else {
