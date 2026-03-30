@@ -419,34 +419,6 @@ export async function recordCrawlRunDetail(db, { crawlRunId, feedId, status, art
 
 /**
  * Increment articles_added on an existing crawl_run_details row.
- * Used by article-batch queue jobs to accumulate the actual insert count
- * after the crawl job has already recorded the detail row with articles_added=0.
- *
- * @param {D1Database} db - The D1 database binding
- * @param {string} crawlRunId - The crawl run id
- * @param {string} feedId - The feed id
- * @param {number} count - The number of articles to add to the current total
- * @returns {Promise<D1Result>}
- */
-export async function incrementCrawlRunDetailArticlesAdded(db, crawlRunId, feedId, count) {
-	const sql = `
-		UPDATE crawl_run_details
-		SET articles_added = articles_added + ?
-		WHERE crawl_run_id = ? AND feed_id = ?
-	`;
-	return db
-		.prepare(sql)
-		.bind(count, crawlRunId, feedId)
-		.run();
-}
-
-/**
- * Set consecutive_failure_count to the given value for a feed.
- *
- * @param {D1Database} db - The D1 database binding
- * @param {string} feedId - The feed id
- * @param {number} count - The new consecutive_failure_count value
- * @returns {Promise<D1Result>}
  */
 export async function updateFeedFailureCount(db, feedId, count) {
 	return db

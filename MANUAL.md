@@ -159,7 +159,7 @@ The default Worker export in `src/index.js` provides:
 
 - `fetch` - the Hono app
 - `scheduled` - daily crawl dispatch
-- `queue` - queue consumer for crawl and article-batch jobs
+- `queue` - queue consumer for crawl jobs
 
 ### Server-side rendering
 
@@ -338,7 +338,7 @@ The Worker dispatches a crawl daily at `02:00 UTC` via the cron trigger in `wran
 
 ### Crawl pipeline
 
-The crawl system is queue-backed and has three phases.
+The crawl system is queue-backed and has two phases.
 
 #### Phase 1: dispatch
 
@@ -361,7 +361,7 @@ If there are no enabled feeds, dispatch returns:
 
 #### Phase 2: crawl job
 
-Implemented by `processCrawlJob(db, queue, job)`.
+Implemented by `processCrawlJob(db, job)`.
 
 Per feed, it:
 
@@ -372,23 +372,14 @@ Per feed, it:
 5. resets or increments failure count
 6. auto-disables the feed after 5 consecutive failures
 7. records a `crawl_run_details` row
-8. enqueues article batches when running through the queue path
+8. inserts discovered articles into `articles` (`ON CONFLICT DO NOTHING`)
+
+Why this inserts inline (instead of a second “article-batch” queue fan-out): this project previously used a separate queue phase to work around an older D1 per-message SQL/statement limit. With the current higher insert limit, the crawl job can safely insert discovered articles directly, which keeps the pipeline simpler and ensures `crawl_run_details.articles_added` is recorded as the final value in one place.
 
 Normalized user-facing crawl errors are intentionally simple:
 
 - invalid XML -> `Failed to parse the feed XML`
 - network and fetch failures -> `Could not reach the feed URL (network error or server unavailable)`
-
-#### Phase 3: article-batch job
-
-Implemented by `processArticleBatchJob(db, job)`.
-
-Each message carries up to 20 prepared articles. The consumer:
-
-1. inserts each article with `ON CONFLICT(id) DO NOTHING`
-2. increments `crawl_run_details.articles_added` by the number of new inserts
-
-Article-batch messages are also sent to the queue in chunks of 100 messages.
 
 ### Single-feed crawl after add
 
@@ -397,8 +388,7 @@ When a user adds a feed through the UI, the system immediately starts a backgrou
 This path:
 
 - creates its own `crawl_runs` row
-- calls `processCrawlJob()` with `queue = null`
-- inserts articles directly instead of enqueueing article-batch messages
+- calls `processCrawlJob()` directly
 
 That keeps the add-feed redirect fast while still recording crawl history.
 

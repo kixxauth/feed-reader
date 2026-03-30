@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import worker from '../src';
 import { createSession } from '../src/auth/session.js';
 import { createState, consumeState } from '../src/auth/state.js';
-import { processCrawlJob, processArticleBatchJob, performFeedCrawl } from '../src/crawl.js';
+import { processCrawlJob, performFeedCrawl } from '../src/crawl.js';
 import { discoverFeedTargets, previewDirectFeedUrl, ADD_FEED_MESSAGES } from '../src/feed-discovery.js';
 import { parseFeedPreview } from '../src/parser.js';
 
@@ -1450,32 +1450,6 @@ describe('Reader page', () => {
 });
 
 describe('Crawl functionality', () => {
-	/** Creates a mock queue that captures sent messages for later inspection/processing. */
-	function createMockQueue() {
-		const messages = [];
-		return {
-			messages,
-			sendBatch(batch) {
-				for (const msg of batch) {
-					messages.push(msg.body);
-				}
-				return Promise.resolve();
-			},
-		};
-	}
-
-	/** Drain all article-batch messages from the mock queue by processing them. */
-	async function drainArticleBatches(db, mockQueue) {
-		let totalAdded = 0;
-		for (const msg of mockQueue.messages) {
-			if (msg.type === 'article-batch') {
-				const result = await processArticleBatchJob(db, msg);
-				totalAdded += result.articlesAdded;
-			}
-		}
-		return totalAdded;
-	}
-
 	beforeEach(async () => {
 		await clearFeeds();
 		await clearArticles();
@@ -1511,22 +1485,13 @@ describe('Crawl functionality', () => {
 			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
 		);
 
-		const mockQueue = createMockQueue();
-		const result = await processCrawlJob(env.DB, mockQueue, { crawlRunId, startedAt, feedId: 'feed-1' });
+		const result = await processCrawlJob(env.DB, { crawlRunId, startedAt, feedId: 'feed-1' });
 
-		// Result reflects the found articles (not yet inserted)
+		// Result reflects the found articles
 		expect(result.crawlRunId).toBe(crawlRunId);
 		expect(result.feedId).toBe('feed-1');
 		expect(result.status).toBe('success');
 		expect(result.articlesFound).toBe(2);
-
-		// Article batches were enqueued
-		const articleBatchMessages = mockQueue.messages.filter((m) => m.type === 'article-batch');
-		expect(articleBatchMessages).toHaveLength(1);
-		expect(articleBatchMessages[0].articles).toHaveLength(2);
-
-		// Process the article batches
-		await drainArticleBatches(env.DB, mockQueue);
 
 		// Articles are actually in the DB
 		const { results } = await env.DB.prepare('SELECT * FROM articles ORDER BY title').all();
@@ -1559,8 +1524,7 @@ describe('Crawl functionality', () => {
 
 		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
 
-		const mockQueue = createMockQueue();
-		await processCrawlJob(env.DB, mockQueue, { crawlRunId, startedAt, feedId: 'feed-1' });
+		await processCrawlJob(env.DB, { crawlRunId, startedAt, feedId: 'feed-1' });
 
 		// Failure count incremented to 1, feed still enabled (not auto-disabled)
 		const row = await env.DB.prepare('SELECT * FROM feeds WHERE id = ?').bind('feed-1').first();
@@ -1587,8 +1551,7 @@ describe('Crawl functionality', () => {
 
 		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
 
-		const mockQueue = createMockQueue();
-		await processCrawlJob(env.DB, mockQueue, { crawlRunId, startedAt, feedId: 'feed-1' });
+		await processCrawlJob(env.DB, { crawlRunId, startedAt, feedId: 'feed-1' });
 
 		// After the 5th failure the feed should be auto-disabled.
 		// disableFeed() sets no_crawl=1 AND resets consecutive_failure_count=0.
@@ -1629,8 +1592,7 @@ describe('Crawl functionality', () => {
 			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
 		);
 
-		const mockQueue = createMockQueue();
-		await processCrawlJob(env.DB, mockQueue, { crawlRunId, startedAt, feedId: 'feed-1' });
+		await processCrawlJob(env.DB, { crawlRunId, startedAt, feedId: 'feed-1' });
 
 		// Failure count reset to 0 after a successful crawl
 		const row = await env.DB.prepare('SELECT * FROM feeds WHERE id = ?').bind('feed-1').first();
@@ -1662,16 +1624,12 @@ describe('Crawl functionality', () => {
 		// First crawl batch
 		const crawlRunId1 = 'test-run-dedup-1';
 		await seedCrawlRuns([{ id: crawlRunId1, started_at: startedAt }]);
-		const mockQueue1 = createMockQueue();
-		await processCrawlJob(env.DB, mockQueue1, { crawlRunId: crawlRunId1, startedAt, feedId: 'feed-1' });
-		await drainArticleBatches(env.DB, mockQueue1);
+		await processCrawlJob(env.DB, { crawlRunId: crawlRunId1, startedAt, feedId: 'feed-1' });
 
 		// Second crawl batch with identical feed content
 		const crawlRunId2 = 'test-run-dedup-2';
 		await seedCrawlRuns([{ id: crawlRunId2, started_at: startedAt }]);
-		const mockQueue2 = createMockQueue();
-		await processCrawlJob(env.DB, mockQueue2, { crawlRunId: crawlRunId2, startedAt, feedId: 'feed-1' });
-		await drainArticleBatches(env.DB, mockQueue2);
+		await processCrawlJob(env.DB, { crawlRunId: crawlRunId2, startedAt, feedId: 'feed-1' });
 
 		// Only one article row should exist despite two crawls (ON CONFLICT DO NOTHING)
 		const { results } = await env.DB.prepare('SELECT * FROM articles').all();
@@ -1697,8 +1655,7 @@ describe('Crawl functionality', () => {
 			new Response('Not Found', { status: 404 })
 		);
 
-		const mockQueue = createMockQueue();
-		await processCrawlJob(env.DB, mockQueue, { crawlRunId, startedAt, feedId: 'feed-1' });
+		await processCrawlJob(env.DB, { crawlRunId, startedAt, feedId: 'feed-1' });
 
 		// crawl_run_details should record the HTTP error message
 		const detail = await env.DB.prepare(
@@ -1733,17 +1690,13 @@ describe('Crawl functionality', () => {
 			new Response(rssXml, { headers: { 'Content-Type': 'application/rss+xml' } })
 		);
 
-		const mockQueue = createMockQueue();
-		const result = await processCrawlJob(env.DB, mockQueue, { crawlRunId, startedAt, feedId: 'feed-ok' });
+		const result = await processCrawlJob(env.DB, { crawlRunId, startedAt, feedId: 'feed-ok' });
 
 		expect(result.crawlRunId).toBe(crawlRunId);
 		expect(result.feedId).toBe('feed-ok');
 		expect(result.status).toBe('success');
 		expect(result.articlesFound).toBe(2);
 		expect(result.errorMessage).toBeNull();
-
-		// Process the article batches and verify DB state
-		await drainArticleBatches(env.DB, mockQueue);
 
 		const detail = await env.DB.prepare(
 			'SELECT * FROM crawl_run_details WHERE crawl_run_id = ? AND feed_id = ?'
@@ -1771,8 +1724,7 @@ describe('Crawl functionality', () => {
 			new Response('Internal Server Error', { status: 500 })
 		);
 
-		const mockQueue = createMockQueue();
-		const result = await processCrawlJob(env.DB, mockQueue, { crawlRunId, startedAt, feedId: 'feed-bad' });
+		const result = await processCrawlJob(env.DB, { crawlRunId, startedAt, feedId: 'feed-bad' });
 
 		expect(result.crawlRunId).toBe(crawlRunId);
 		expect(result.feedId).toBe('feed-bad');

@@ -18,7 +18,7 @@ import { handleCrawlHistory, handleCrawlHistoryDetail } from './routes/crawl-his
 import { handleReader } from './routes/reader.js';
 import { handleDispatchCrawlPage } from './routes/dispatch-crawl.js';
 import { handleDispatchCrawl } from './routes/api/dispatch-crawl.js';
-import { dispatchCrawl, processCrawlJob, processArticleBatchJob } from './crawl.js';
+import { dispatchCrawl, processCrawlJob } from './crawl.js';
 
 const app = new Hono();
 
@@ -74,13 +74,13 @@ export default {
 		for (const message of batch.messages) {
 			const { type, crawlRunId, feedId } = message.body;
 			try {
-				let result;
-				if (type === 'article-batch') {
-					result = await processArticleBatchJob(env.DB, message.body);
-				} else {
-					result = await processCrawlJob(env.DB, env.CRAWL_QUEUE, message.body);
+				if (type && type !== 'crawl') {
+					console.warn(`Ignoring unknown queue job type=${type} (crawlRunId=${crawlRunId}, feedId=${feedId})`);
+					message.ack();
+					continue;
 				}
-				console.log('Queue job processed:', JSON.stringify(result));
+
+				const result = await processCrawlJob(env.DB, message.body);
 				message.ack();
 			} catch (err) {
 				console.error(`Queue job failed (type=${type}, crawlRunId=${crawlRunId}, feedId=${feedId}):`, err);
