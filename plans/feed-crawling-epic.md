@@ -1,5 +1,15 @@
 # Implementation Plan: Automatic Feed Crawling Epic
 
+## Status note (implementation reality)
+
+This document is a historical implementation plan. The epic was implemented, but some details here no longer match the current codebase:
+
+- The crawler uses a **queue fan-out** model (`dispatchCrawl` + `processCrawlJob`) rather than a single `performCrawl(db)` loop.
+- Feed parsing is implemented via an event-driven **SAX parser** in `src/parser.js` (not `fast-xml-parser`).
+- `crawl_runs` has been simplified via migrations: it now stores **only** `id`, `started_at`, and `created_at` (no `completed_at` or denormalized totals).
+
+Use this plan for high-level intent and rationale, but trust the current code and migrations for exact behavior and schema.
+
 ## Implementation Approach
 
 This epic adds automatic background crawling of all RSS feeds once every 24 hours, with per-feed crawl control, failure tracking, and a history UI for the site owner. The strategy involves:

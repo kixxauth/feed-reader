@@ -118,7 +118,9 @@ node scripts/sync-feeds-to-remote.js --batch-size=200
 
 ## Recover Failed Feeds
 
-`scripts/recover-failed-feeds.js` examines feeds that failed in the most recent crawl run and attempts to find a new working feed URL by scraping each feed's website. If a new URL is found and parses successfully, the script updates `xml_url` in the database, inserts new articles, and re-enables the feed if it was auto-disabled.
+`scripts/recover-failed-feeds.js` examines feeds that failed in the most recent crawl run and attempts to find a new working feed URL by scraping each feed's website. If a new URL is found and parses successfully, the script updates `xml_url` in the database and re-enables the feed if it was auto-disabled.
+
+For operational safety (especially on remote), this script does **not** insert articles. The next scheduled crawl run will pick up articles after the feed URL is corrected.
 
 ```bash
 # Dry run — discover and report, no DB changes

@@ -5,8 +5,9 @@
  * For each feed that failed in the most recent crawl run, attempts to
  * re-discover a working feed URL by scraping the feed's html_url. If a new
  * (different) xml_url is found and can be parsed, the feed's xml_url is
- * updated in the database, new articles are inserted, and the feed is
- * re-enabled if it was previously auto-disabled.
+ * updated in the database, and the feed is re-enabled if it was previously
+ * auto-disabled. Articles are NOT inserted by this script — the next scheduled
+ * crawl will pick them up.
  *
  * Usage:
  *   node scripts/recover-failed-feeds.js --env local
@@ -19,7 +20,54 @@
 import { execSync } from 'node:child_process';
 import { discoverFeedTargets } from '../src/feed-discovery.js';
 import { parseFeedPreview, parseFeedXml } from '../src/parser.js';
-import { canonicalizeHttpUrl, deriveHostname, normalizeUrlForComparison } from '../src/feed-utils.js';
+import {
+	canonicalizeHttpUrl,
+	deriveHostname,
+	normalizeUrlForComparison,
+} from '../src/feed-utils.js';
+
+/**
+ * Wrangler failures often contain useful JSON in stdout; Node's default error
+ * formatting truncates buffers. This prints the full stdout/stderr payloads.
+ *
+ * @param {unknown} err
+ * @param {{ command: string }} context
+ */
+function logExecSyncFailure(err, { command }) {
+	// eslint-disable-next-line no-console
+	console.error('\n[wrangler] Command failed:', command);
+
+	/** @type {any} */
+	const e = err;
+	// eslint-disable-next-line no-console
+	console.error('[wrangler] status:', e?.status ?? null, 'signal:', e?.signal ?? null);
+
+	const stdoutBuf = e?.stdout ?? (Array.isArray(e?.output) ? e.output[1] : null);
+	const stderrBuf = e?.stderr ?? (Array.isArray(e?.output) ? e.output[2] : null);
+
+	if (stdoutBuf) {
+		// eslint-disable-next-line no-console
+		console.error('\n[wrangler] stdout:\n' + Buffer.from(stdoutBuf).toString('utf8'));
+	}
+	if (stderrBuf) {
+		// eslint-disable-next-line no-console
+		console.error('\n[wrangler] stderr:\n' + Buffer.from(stderrBuf).toString('utf8'));
+	}
+
+	// If stdout looks like JSON, print a parsed view too.
+	try {
+		const stdoutText = stdoutBuf ? Buffer.from(stdoutBuf).toString('utf8').trim() : '';
+		if (stdoutText.startsWith('{') || stdoutText.startsWith('[')) {
+			// eslint-disable-next-line no-console
+			console.error('\n[wrangler] stdout (parsed JSON):\n' + JSON.stringify(JSON.parse(stdoutText), null, 2));
+		}
+	} catch {
+		// ignore parse failures
+	}
+
+	// Re-throw so the script still exits non-zero.
+	throw err;
+}
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -62,10 +110,13 @@ if (dryRun) {
  */
 function d1Query(sql) {
 	const escaped = sql.replace(/"/g, '\\"');
-	const output = execSync(
-		`npx wrangler d1 execute DB ${locationFlag} --json --command "${escaped}"`,
-		{ stdio: ['pipe', 'pipe', 'pipe'] }
-	);
+	const command = `npx wrangler d1 execute DB ${locationFlag} --json --command "${escaped}"`;
+	let output;
+	try {
+		output = execSync(command, { stdio: ['pipe', 'pipe', 'pipe'] });
+	} catch (err) {
+		logExecSyncFailure(err, { command });
+	}
 	const parsed = JSON.parse(output.toString('utf8'));
 	// wrangler returns an array of result sets; we always issue a single statement
 	return parsed[0]?.results ?? [];
@@ -78,9 +129,12 @@ function d1Query(sql) {
  */
 function d1Execute(sql) {
 	const escaped = sql.replace(/"/g, '\\"');
-	execSync(`npx wrangler d1 execute DB ${locationFlag} --command "${escaped}"`, {
-		stdio: 'pipe',
-	});
+	const command = `npx wrangler d1 execute DB ${locationFlag} --command "${escaped}"`;
+	try {
+		execSync(command, { stdio: 'pipe' });
+	} catch (err) {
+		logExecSyncFailure(err, { command });
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -215,13 +269,45 @@ async function main() {
 
 		console.log(`    Discovered feed URL: ${newXmlUrl}`);
 
+		// Avoid "recovering" feeds to archived sources (e.g. Wayback Machine).
+		try {
+			const host = new URL(newXmlUrl).hostname.toLowerCase();
+			if (host === 'web.archive.org') {
+				console.log('    Skipping: discovered URL is an archived web.archive.org feed.\n');
+				skippedCount++;
+				continue;
+			}
+		} catch {
+			// If it's not a valid URL, later normalization/fetch will fail and be handled.
+		}
+
 		if (oldNormalized && newNormalized && oldNormalized === newNormalized) {
 			console.log('    Same URL as current xml_url. No update needed. Skipping.\n');
 			skippedCount++;
 			continue;
 		}
 
-		// 4. Fetch and parse the new feed URL to verify it works.
+		// 4a. Ensure the new XML URL doesn't collide with the normalized-unique index.
+		if (newNormalized) {
+			const collisionRows = d1Query(`
+				SELECT id, title, xml_url
+				FROM feeds
+				WHERE xml_url IS NOT NULL
+				  AND LOWER(TRIM(xml_url)) = ${escapeSqlString(newNormalized)}
+				  AND id != ${escapeSqlString(feedId)}
+				LIMIT 1
+			`);
+			if (collisionRows.length > 0) {
+				const collision = collisionRows[0];
+				console.log(
+					`    Skipping: discovered URL conflicts with existing feed (${collision.title ?? collision.id}).\n`
+				);
+				skippedCount++;
+				continue;
+			}
+		}
+
+		// 4b. Fetch and parse the new feed URL to verify it works.
 		let xmlText;
 		try {
 			xmlText = await fetchText(newXmlUrl);
@@ -253,12 +339,13 @@ async function main() {
 		const newHostname = deriveHostname(newXmlUrl, row.html_url);
 		const newTitle = preview.title ?? row.title;
 		const newHtmlUrl = preview.htmlUrl ? (canonicalizeHttpUrl(preview.htmlUrl) ?? preview.htmlUrl) : row.html_url;
+		const shouldReEnable = row.status === 'auto_disabled';
 
 		if (dryRun) {
 			console.log(`    [dry-run] Would update xml_url to: ${newXmlUrl}`);
 			console.log(`    [dry-run] Would update hostname to: ${newHostname}`);
-			console.log(`    [dry-run] Would insert up to ${articles.length} article(s).`);
-			if (row.no_crawl) {
+			console.log(`    [dry-run] Would not insert articles (next scheduled crawl will pick them up).`);
+			if (shouldReEnable) {
 				console.log('    [dry-run] Would re-enable feed (no_crawl → 0).');
 			}
 			console.log();
@@ -268,7 +355,7 @@ async function main() {
 
 		// Update xml_url, hostname, title, html_url, and re-enable if needed.
 		try {
-			const noCrawlValue = 0;
+			const noCrawlValue = shouldReEnable ? 0 : (row.no_crawl ?? 0);
 			const updateSql = [
 				`UPDATE feeds SET`,
 				`  xml_url = ${escapeSqlString(newXmlUrl)},`,
@@ -289,40 +376,8 @@ async function main() {
 			continue;
 		}
 
-		// Insert articles.
-		const addedAt = new Date().toISOString();
-		let articlesInserted = 0;
-
-		for (const article of articles) {
-			if (!article.id) {
-				continue;
-			}
-
-			try {
-				const insertSql = [
-					`INSERT INTO articles (id, feed_id, link, title, published, updated, added)`,
-					`VALUES (`,
-					`  ${escapeSqlString(article.id)},`,
-					`  ${escapeSqlString(feedId)},`,
-					`  ${escapeSqlString(article.link)},`,
-					`  ${escapeSqlString(article.title)},`,
-					`  ${escapeSqlString(article.published)},`,
-					`  ${escapeSqlString(article.updated)},`,
-					`  ${escapeSqlString(addedAt)}`,
-					`)`,
-					`ON CONFLICT(id) DO NOTHING`,
-				].join(' ');
-
-				d1Execute(insertSql);
-				articlesInserted++;
-			} catch (err) {
-				// Non-fatal: log and continue to next article.
-				console.error(`    Warning: failed to insert article ${article.id}: ${err.message}`);
-			}
-		}
-
-		console.log(`    Inserted ${articlesInserted} article(s).`);
-		if (row.no_crawl) {
+		console.log(`    Skipping article inserts (next scheduled crawl will pick them up).`);
+		if (shouldReEnable) {
 			console.log('    Feed re-enabled (was auto-disabled).');
 		}
 		console.log();

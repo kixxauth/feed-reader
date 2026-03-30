@@ -572,6 +572,8 @@ node scripts/recover-failed-feeds.js --env remote
 
 This script looks at feeds that failed in the most recent crawl run, tries discovery against each feed's `html_url`, and updates the feed if a new working `xml_url` is found.
 
+This script does **not** insert articles. After the feed URL is corrected, the next scheduled crawl run will pick up articles normally.
+
 ### Hydrate a template
 
 `scripts/hydrate-template.js`
