@@ -1,7 +1,5 @@
 # Feed Reader
-A simple RSS feed reader application built and deployed on Cloudflare Workers.
-
-Users can add feeds from the UI at `/feeds/add`, or import feeds and articles through the CLI scripts.
+An RSS feed reader application built and deployed on Cloudflare Workers.
 
 ## Development
 The local development environment uses Node.js and Cloudflare Wrangler.
@@ -58,45 +56,28 @@ npx wrangler deploy
 
 This app uses a Cloudflare D1 SQLite database (binding name `DB`) to store feed metadata.
 
-**Apply migrations (local):**
+Migrations live in `migrations/`. The `migrations_dir` field in `wrangler.jsonc` tells wrangler where to find them.
+
+**Apply migrations**
 
 ```bash
 npx wrangler d1 migrations apply feed-reader-db --local
-```
-
-**Apply migrations (production):**
-
-```bash
 npx wrangler d1 migrations apply feed-reader-db --remote
 ```
 
-Migrations live in `migrations/`. The `migrations_dir` field in `wrangler.jsonc` tells wrangler where to find them.
-
-**Run a SQL command (local):**
+**Run a SQL command**
 
 ```bash
 npx wrangler d1 execute feed-reader-db --local --command "SELECT * FROM feeds LIMIT 10"
-```
-
-**Run a SQL command (production):**
-
-```bash
 npx wrangler d1 execute feed-reader-db --remote --command "SELECT * FROM feeds LIMIT 10"
 ```
 
-**Run a SQL script file (local):**
+**Run a SQL script file**
 
 ```bash
 npx wrangler d1 execute feed-reader-db --local --file ./path/to/script.sql
-```
-
-**Run a SQL script file (production):**
-
-```bash
 npx wrangler d1 execute feed-reader-db --remote --file ./path/to/script.sql
 ```
-
-The add-feed flow relies on the normalized `xml_url` uniqueness rule added by `migrations/0006_add_unique_index_on_feed_xml_url.sql`, so apply migrations before testing feed creation locally.
 
 ## Feed Crawling
 
@@ -108,16 +89,7 @@ Feeds are crawled automatically to fetch new articles.
 
 **Immediate crawl on add**: When a user confirms a newly discovered feed, the Worker schedules a single-feed crawl in the background so the `/feeds` redirect returns immediately.
 
-## Add Feed Flow
-
-The add-feed workflow is server-rendered and multi-step:
-
-1. Submit a website URL or direct feed URL at `/feeds/add`
-2. Discover one feed, many feeds, or no feeds from the submitted target
-3. Confirm the feed details before inserting the new `feeds` row
-4. Redirect back to `/feeds` while the first crawl runs asynchronously
-
-For implementation details and tradeoffs, see `documentation/add-feed.md` and `MANUAL.md`.
+**Manually invoke a crawl**: You can manually invoke a crawl on the remote application by visiting the page at `/dispatch-crawl`.
 
 **Local testing**: To trigger the scheduled crawl handler locally, start the dev server with scheduled event support and then call the scheduled endpoint:
 
