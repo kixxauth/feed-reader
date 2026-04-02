@@ -79,6 +79,13 @@ npx wrangler d1 execute feed-reader-db --local --file ./path/to/script.sql
 npx wrangler d1 execute feed-reader-db --remote --file ./path/to/script.sql
 ```
 
+**Clone the remote DB**
+
+```bash
+npx wrangler d1 export feed-reader-db --remote --output=./tmp/prod-snapshot.sql
+npx wrangler d1 execute feed-reader-db --file=./tmp/prod-snapshot.sql
+```
+
 ## Feed Crawling
 
 Feeds are crawled automatically to fetch new articles.
