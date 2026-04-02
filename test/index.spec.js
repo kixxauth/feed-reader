@@ -2975,8 +2975,8 @@ describe('Reader page', () => {
 		expect(body).toContain('class="feed-group"');
 	});
 
-	// 8. Group ordering — feed with more articles appears first
-	it('orders feed groups by article count descending', async () => {
+	// 8. Group ordering — feed with fewer 30-day posts appears first
+	it('orders feed groups by 30-day post frequency ascending', async () => {
 		await seedFeeds([
 			{ id: 'feed-few', hostname: 'few.example.com', title: 'Few Articles Feed', xml_url: 'https://few.example.com/feed' },
 			{ id: 'feed-many', hostname: 'many.example.com', title: 'Many Articles Feed', xml_url: 'https://many.example.com/feed' },
@@ -2995,8 +2995,8 @@ describe('Reader page', () => {
 		expect(response.status).toBe(200);
 		const body = await response.text();
 
-		// Many Articles Feed (3 articles) should appear before Few Articles Feed (1 article)
-		expect(body.indexOf('Many Articles Feed')).toBeLessThan(body.indexOf('Few Articles Feed'));
+		// Few Articles Feed (1 article in 30 days) should appear before Many Articles Feed (3 articles)
+		expect(body.indexOf('Few Articles Feed')).toBeLessThan(body.indexOf('Many Articles Feed'));
 	});
 
 	// 9. Article ordering within group — newest first

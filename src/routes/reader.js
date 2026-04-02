@@ -9,8 +9,9 @@
  *
  * Articles are grouped by feed. Groups from feeds marked as featured (featured = 1)
  * are rendered in a visually distinct "Featured" section at the top. Remaining groups
- * appear below. Within each section, groups are sorted by article count descending,
- * with feed title ascending as a tie-breaker. Within a group, articles are newest-first.
+ * appear below. Within each section, groups are sorted by 30-day post frequency ascending
+ * (least-frequent posters first), with feed title ascending as a tie-breaker.
+ * Within a group, articles are newest-first.
  *
  * Auth: protected by authMiddleware in src/index.js (no PUBLIC_PATHS entry).
  */
@@ -44,6 +45,7 @@ export async function handleReader(c) {
 				feedTitle: row.feed_title,
 				feedBaseUrl: row.feed_html_url || row.feed_xml_url,
 				featured: row.feed_featured === 1,
+				postCount30d: row.feed_post_count_30d,
 				articles: [],
 			});
 		}
@@ -51,8 +53,8 @@ export async function handleReader(c) {
 	}
 
 	const sortGroups = (a, b) => {
-		const countDiff = b.articles.length - a.articles.length;
-		if (countDiff !== 0) return countDiff;
+		const freqDiff = a.postCount30d - b.postCount30d;
+		if (freqDiff !== 0) return freqDiff;
 		return a.feedTitle.localeCompare(b.feedTitle);
 	};
 

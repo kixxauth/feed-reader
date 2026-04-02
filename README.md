@@ -83,7 +83,7 @@ npx wrangler d1 execute feed-reader-db --remote --file ./path/to/script.sql
 
 ```bash
 npx wrangler d1 export feed-reader-db --remote --output=./tmp/prod-snapshot.sql
-npx wrangler d1 execute feed-reader-db --file=./tmp/prod-snapshot.sql
+npx wrangler d1 execute feed-reader-db --local --file=./tmp/prod-snapshot.sql
 ```
 
 ## Feed Crawling

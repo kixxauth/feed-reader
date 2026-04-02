@@ -574,12 +574,20 @@ export async function getCrawlRunDetailByFeed(db, crawlRunId, feedId) {
  */
 export async function getDailyReaderArticles(db, selectedDate) {
 	const sql = `
+		WITH feed_frequency AS (
+			SELECT feed_id, COUNT(*) AS post_count_30d
+			FROM articles
+			WHERE DATE(COALESCE(published, added)) >= DATE(?, '-30 days')
+			  AND DATE(COALESCE(published, added)) <= DATE(?)
+			GROUP BY feed_id
+		)
 		SELECT
 			feeds.id AS feed_id,
 			feeds.title AS feed_title,
 			feeds.html_url AS feed_html_url,
 			feeds.xml_url AS feed_xml_url,
 			feeds.featured AS feed_featured,
+			COALESCE(ff.post_count_30d, 0) AS feed_post_count_30d,
 			articles.id AS article_id,
 			articles.title AS article_title,
 			articles.link AS article_link,
@@ -587,11 +595,12 @@ export async function getDailyReaderArticles(db, selectedDate) {
 			articles.added AS article_added
 		FROM articles
 		JOIN feeds ON articles.feed_id = feeds.id
+		LEFT JOIN feed_frequency ff ON ff.feed_id = feeds.id
 		WHERE feeds.no_crawl = 0
 		  AND DATE(COALESCE(articles.published, articles.added)) = ?
 		ORDER BY feeds.title ASC, COALESCE(articles.published, articles.added) DESC, articles.id ASC
 	`;
-	const result = await db.prepare(sql).bind(selectedDate).all();
+	const result = await db.prepare(sql).bind(selectedDate, selectedDate, selectedDate).all();
 	return result.results;
 }
 
